@@ -1,0 +1,3 @@
+.local-test/
+*.xlsx
+__pycache__/

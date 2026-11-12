@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>JB7 ランニングコスト</title>
+<meta name="description" content="JB7 ライフの維持費・燃費・メンテナンス記録">
+<meta name="theme-color" content="#185FA5">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<meta name="apple-mobile-web-app-title" content="JB7コスト">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css">
+<link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+<div class="shell">
+  <nav class="nav" id="nav">
+    <div class="brand"><i class="ti ti-car" aria-hidden="true"></i><span>JB7 コスト</span></div>
+    <button data-view="home" class="active"><i class="ti ti-home" aria-hidden="true"></i><span>ホーム</span></button>
+    <button data-view="records"><i class="ti ti-list" aria-hidden="true"></i><span>記録</span></button>
+    <button data-view="add" class="add"><i class="ti ti-circle-plus" aria-hidden="true"></i><span>追加</span></button>
+    <button data-view="stats"><i class="ti ti-chart-bar" aria-hidden="true"></i><span>集計</span></button>
+    <button data-view="settings"><i class="ti ti-settings" aria-hidden="true"></i><span>設定</span></button>
+  </nav>
+  <main id="main"></main>
+</div>
+<div id="sheet" class="sheet-wrap" hidden></div>
+<div id="toast" class="toast" hidden></div>
+<script type="module" src="js/app.js"></script>
+</body>
+</html>
