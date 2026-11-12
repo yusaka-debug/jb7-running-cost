@@ -142,14 +142,15 @@ export async function exportWorkbook() {
 
   const d = new Date();
   const stamp = `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`;
-  XLSX.writeFile(wb, `JB7ランニングコスト_${stamp}.xlsx`);
+  const safe = String(s.vehicleName || '乗り物').replace(/[\/:*?"<>|\s]+/g, '_');
+  XLSX.writeFile(wb, `${safe}_維持費_${stamp}.xlsx`);
 }
 
 export function exportJSON() {
-  const blob = new Blob([JSON.stringify({ app: 'jb7-running-cost', exportedAt: new Date().toISOString(), records: state.records }, null, 1)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ app: 'norimono-cost', exportedAt: new Date().toISOString(), records: state.records }, null, 1)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `jb7-backup-${Date.now()}.json`;
+  a.download = `norimono-backup-${Date.now()}.json`;
   a.click();
   setTimeout(() => URL.revokeObjectURL(a.href), 5000);
 }
@@ -158,7 +159,7 @@ export function importJSON(text) {
   const data = JSON.parse(text);
   if (!Array.isArray(data.records)) throw new Error('バックアップファイルの形式が違います');
   const now = Date.now();
-  for (const r of active()) { r.deleted = true; r.updatedAt = now; }
+  for (const r of active(null, '*')) { r.deleted = true; r.updatedAt = now; }
   for (const r of data.records) {
     const rec = { ...r, updatedAt: now };
     const i = state.records.findIndex(x => x.id === rec.id);

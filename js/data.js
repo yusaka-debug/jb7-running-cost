@@ -1,5 +1,5 @@
 // データ保存・モデル・計算ロジック
-export const APP_VERSION = '0.1.0';
+export const APP_VERSION = '0.2.0';
 
 export const CATS = {
   fuel:    { label: 'ガソリン',     short: '給油',     icon: 'ti-gas-station',  color: '#BA7517' },
@@ -12,7 +12,7 @@ export const CATS = {
 // 維持費に含めるカテゴリ（計画は含めない）
 export const COST_TYPES = ['doc', 'custom', 'maint', 'fuel', 'coating'];
 
-export const DEFAULT_MAINT_PRESETS = [
+export const JB7_MAINT_PRESETS = [
   'オイル交換', 'オイル・フィルター交換', 'MTオイル・EGオイル・フィルター交換', 'ATF交換',
   'タイヤ交換（冬→夏）', 'タイヤ交換（冬）ローテーション', 'オイル交換・タイヤローテーション',
   'リアタイヤ交換持ち込み1本', 'タイヤ代', '12か月点検', 'キーパーコーティング（2回目）',
@@ -20,27 +20,53 @@ export const DEFAULT_MAINT_PRESETS = [
   'リアブレーキパッド交換', 'ブレーキパッドチェック', 'ブレーキフルード交換', 'ワイパーゴム交換',
   'リアワイパー交換', '助手席ウインドウモーター交換', 'スマートキーボタン電池交換', 'バッテリー交換',
 ];
+export const CAR_MAINT_PRESETS = [
+  'オイル交換', 'オイル・フィルター交換', 'MTオイル交換', 'デフオイル交換', 'タイヤ交換（夏→冬）', 'タイヤ交換（冬→夏）',
+  'タイヤローテーション', 'タイヤ代', '12か月点検', '車検', 'エアコンフィルター交換', 'エアクリーナー交換',
+  'ブレーキパッド交換', 'ブレーキフルード交換', 'クーラント交換', 'スパークプラグ交換', 'ワイパーゴム交換', 'バッテリー交換', '洗車',
+];
+export const BIKE_MAINT_PRESETS = [
+  'オイル交換', 'オイル・フィルター交換', 'チェーン清掃・注油', 'チェーン調整', 'チェーン・スプロケット交換',
+  'タイヤ交換（前）', 'タイヤ交換（後）', 'ブレーキパッド交換（前）', 'ブレーキパッド交換（後）', 'ブレーキフルード交換',
+  'クーラント交換', 'エアクリーナー交換', 'スパークプラグ交換', 'バッテリー交換', '12か月点検', '車検', '洗車',
+];
 
-export const DEFAULT_SETTINGS = {
-  vehicleName: 'JB7 ライフ',
-  deliveryOdo: 60000,
-  deliveryDate: '',
-  loanPaid: 0,       // 車両のみ支払総額（総額に加算）
-  purchaseCost: 0,   // 車両購入費用（参考表示）
-  reminders: [
-    { name: 'エンジンオイル', keyword: 'オイル', km: 3000, months: 6 },
+const REMINDERS = {
+  car: [
+    { name: 'エンジンオイル', keyword: 'オイル', km: 5000, months: 6 },
     { name: 'エアコンフィルター', keyword: 'エアコンフィルター', km: 0, months: 12 },
     { name: 'ワイパーゴム', keyword: 'ワイパー', km: 0, months: 12 },
     { name: 'バッテリー', keyword: 'バッテリー', km: 0, months: 36 },
   ],
-  maintPresets: DEFAULT_MAINT_PRESETS,
+  bike: [
+    { name: 'エンジンオイル', keyword: 'オイル', km: 3000, months: 6 },
+    { name: 'チェーン注油', keyword: 'チェーン', km: 1000, months: 0 },
+    { name: 'ブレーキフルード', keyword: 'ブレーキフルード', km: 0, months: 24 },
+    { name: 'バッテリー', keyword: 'バッテリー', km: 0, months: 24 },
+  ],
 };
+
+// 乗り物ごとの設定。id は設定レコードの id（JB7 は過去データ互換のため 'settings'）
+export const DEFAULT_VEHICLE = {
+  vehicleName: '新しい乗り物', kind: 'car', order: 99,
+  deliveryOdo: 0, deliveryDate: '', loanPaid: 0, purchaseCost: 0,
+  reminders: REMINDERS.car, maintPresets: CAR_MAINT_PRESETS,
+};
+const BUILTIN_VEHICLES = {
+  'settings':      { vehicleName: 'JB7 ライフ', kind: 'car', order: 0, deliveryOdo: 60000, reminders: [{ name: 'エンジンオイル', keyword: 'オイル', km: 3000, months: 6 }, ...REMINDERS.car.slice(1)], maintPresets: JB7_MAINT_PRESETS },
+  'settings-fl5':  { vehicleName: 'FL5', kind: 'car', order: 1, reminders: REMINDERS.car, maintPresets: CAR_MAINT_PRESETS },
+  'settings-mc51': { vehicleName: 'MC51', kind: 'bike', order: 2, reminders: REMINDERS.bike, maintPresets: BIKE_MAINT_PRESETS },
+};
+export const presetsForKind = kind => kind === 'bike' ? BIKE_MAINT_PRESETS : CAR_MAINT_PRESETS;
+export const remindersForKind = kind => REMINDERS[kind] || REMINDERS.car;
 
 const KEY = 'jb7rc.v1';
 const SYNC_KEY = 'jb7rc.sync';
+const VID_KEY = 'jb7rc.vid';
 
 export const state = {
-  records: [],          // type=settings を含む全レコード（削除は deleted=true の墓標）
+  records: [],          // type=settings（乗り物）を含む全レコード（削除は deleted=true の墓標）
+  vid: 'settings',      // 表示中の乗り物
   sync: { url: '', token: '', lastPush: 0, lastSyncAt: 0, status: 'off', error: '' },
 };
 
@@ -52,14 +78,23 @@ export function uid() {
 export function load() {
   try {
     const raw = localStorage.getItem(KEY);
-    if (raw) state.records = JSON.parse(raw).records || [];
+    state.records = raw ? (JSON.parse(raw).records || []) : [];
   } catch (e) { console.error(e); }
   try {
     const s = localStorage.getItem(SYNC_KEY);
     if (s) Object.assign(state.sync, JSON.parse(s));
   } catch (e) { console.error(e); }
-  if (!state.records.find(r => r.type === 'settings')) {
-    state.records.push({ id: 'settings', type: 'settings', extra: { ...DEFAULT_SETTINGS }, updatedAt: 0, deleted: false });
+  ensureBuiltins();
+  try { state.vid = localStorage.getItem(VID_KEY) || 'settings'; } catch {}
+  fixCurrentVid();
+}
+
+// 標準の乗り物（JB7/FL5/MC51）が無ければ作る。updatedAt=0 なので他端末で編集済みの内容が同期で必ず勝つ
+export function ensureBuiltins() {
+  for (const [id, v] of Object.entries(BUILTIN_VEHICLES)) {
+    if (!state.records.find(r => r.id === id)) {
+      state.records.push({ id, type: 'settings', extra: { ...DEFAULT_VEHICLE, ...v }, updatedAt: 0, deleted: false });
+    }
   }
 }
 
@@ -71,19 +106,53 @@ export function saveSync() {
   localStorage.setItem(SYNC_KEY, JSON.stringify({ url, token, lastPush, lastSyncAt }));
 }
 
-export function settings() {
-  const r = state.records.find(x => x.type === 'settings');
-  return { ...DEFAULT_SETTINGS, ...(r ? r.extra : {}) };
+// ---------- 乗り物 ----------
+export function vehicles() {
+  return state.records.filter(r => r.type === 'settings' && !r.deleted)
+    .map(r => ({ id: r.id, ...DEFAULT_VEHICLE, ...(BUILTIN_VEHICLES[r.id] || {}), ...(r.extra || {}) }))
+    .sort((a, b) => (a.order ?? 99) - (b.order ?? 99) || a.vehicleName.localeCompare(b.vehicleName));
 }
-export function updateSettings(patch) {
-  const r = state.records.find(x => x.type === 'settings');
-  r.extra = { ...settings(), ...patch };
+export function fixCurrentVid() {
+  const vs = vehicles();
+  if (!vs.find(v => v.id === state.vid)) state.vid = vs[0]?.id || 'settings';
+}
+export function setVehicle(vid) {
+  state.vid = vid;
+  try { localStorage.setItem(VID_KEY, vid); } catch {}
+}
+export function addVehicle(name, kind) {
+  const order = Math.max(0, ...vehicles().map(v => v.order ?? 0)) + 1;
+  const id = 'settings-' + uid();
+  state.records.push({ id, type: 'settings', extra: { ...DEFAULT_VEHICLE, vehicleName: name, kind, order, reminders: remindersForKind(kind), maintPresets: presetsForKind(kind) }, updatedAt: Date.now(), deleted: false });
+  save();
+  return id;
+}
+export function deleteVehicle(vid) {
+  const now = Date.now();
+  for (const r of state.records) {
+    if (r.id === vid || (r.type !== 'settings' && vidOf(r) === vid)) { r.deleted = true; r.updatedAt = now; }
+  }
+  save();
+  fixCurrentVid();
+}
+
+export const vidOf = r => (r.extra && r.extra.vid) || 'settings';
+
+export function settings(vid = state.vid) {
+  const r = state.records.find(x => x.id === vid && x.type === 'settings');
+  return { ...DEFAULT_VEHICLE, ...(BUILTIN_VEHICLES[vid] || {}), ...(r ? r.extra : {}) };
+}
+export function updateSettings(patch, vid = state.vid) {
+  let r = state.records.find(x => x.id === vid && x.type === 'settings');
+  if (!r) { r = { id: vid, type: 'settings', extra: {}, deleted: false }; state.records.push(r); }
+  r.extra = { ...settings(vid), ...patch };
   r.updatedAt = Date.now();
   save();
 }
 
-export function active(type) {
-  return state.records.filter(r => !r.deleted && r.type !== 'settings' && (!type || r.type === type));
+/** 有効なレコード。vid='*' で全乗り物 */
+export function active(type, vid = state.vid) {
+  return state.records.filter(r => !r.deleted && r.type !== 'settings' && (!type || r.type === type) && (vid === '*' || vidOf(r) === vid));
 }
 
 export function upsert(rec) {
@@ -99,17 +168,18 @@ export function remove(id) {
   if (r) { r.deleted = true; r.updatedAt = Date.now(); save(); }
 }
 
-export function newRecord(type, fields = {}) {
+export function newRecord(type, fields = {}, vid = state.vid) {
   return {
     id: uid(), type, date: '', title: '', amount: 0, odo: null, liters: null, full: true,
-    note: '', group: '', extra: {}, updatedAt: 0, deleted: false, ...fields,
+    note: '', group: '', updatedAt: 0, deleted: false, ...fields,
+    extra: { ...(fields.extra || {}), vid },
   };
 }
 
 // 金額式（例: 13800+1290）を評価。+ - * / と括弧のみ許可
 export function evalAmount(text) {
   const s = String(text ?? '').replace(/[，,円¥\s]/g, '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
-    .replace(/[＋]/g, '+').replace(/[－ー−]/g, '-').replace(/[×＊]/g, '*').replace(/[÷／]/g, '/');
+    .replace(/[＋]/g, '+').replace(/[－−]/g, '-').replace(/[×＊]/g, '*').replace(/[÷／]/g, '/').replace(/．/g, '.');
   if (s === '') return { value: 0, expr: '' };
   if (!/^[0-9+\-*/().]+$/.test(s)) return { value: NaN, expr: s };
   let v;
@@ -131,29 +201,30 @@ export function daysBetween(a, b) {
   return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000);
 }
 
-// ---------- 集計 ----------
-export function sumOf(type) {
-  return active(type).reduce((s, r) => s + (Number(r.amount) || 0), 0);
+// ---------- 集計（すべて乗り物単位。vid 省略時は表示中の乗り物） ----------
+export function sumOf(type, vid = state.vid) {
+  return active(type, vid).reduce((s, r) => s + (Number(r.amount) || 0), 0);
 }
 
-export function totals() {
-  const s = settings();
+export function totals(vid = state.vid) {
+  const s = settings(vid);
   const byType = {};
-  for (const t of COST_TYPES) byType[t] = sumOf(t);
+  for (const t of COST_TYPES) byType[t] = sumOf(t, vid);
   const upkeep = COST_TYPES.reduce((a, t) => a + byType[t], 0);
-  return { byType, upkeep, loan: Number(s.loanPaid) || 0, grand: upkeep + (Number(s.loanPaid) || 0), plan: sumOf('plan') };
+  const loan = Number(s.loanPaid) || 0;
+  return { byType, upkeep, loan, grand: upkeep + loan, plan: sumOf('plan', vid) };
 }
 
-export function currentOdo() {
-  const s = settings();
+export function currentOdo(vid = state.vid) {
+  const s = settings(vid);
   let max = Number(s.deliveryOdo) || 0;
-  for (const r of active()) if (r.odo && r.odo > max) max = r.odo;
+  for (const r of active(null, vid)) if (r.odo && r.odo > max) max = r.odo;
   return max;
 }
 
 // 給油ごとの計算: 前回からの距離 / 単価 / 満タン法燃費
-export function fuelStats() {
-  const list = active('fuel').filter(r => r.odo).sort((a, b) => a.odo - b.odo || (a.date || '').localeCompare(b.date || ''));
+export function fuelStats(vid = state.vid) {
+  const list = active('fuel', vid).filter(r => r.odo).sort((a, b) => a.odo - b.odo || (a.date || '').localeCompare(b.date || ''));
   const per = {};
   let prev = null, lastFull = null, litersSinceFull = 0;
   let firstFullOdo = null, lastFullOdo = null, litersForAvg = 0;
@@ -179,19 +250,19 @@ export function fuelStats() {
   return { per, avgEconomy, totalLiters, ordered: list };
 }
 
-export function costPerKm() {
-  const dist = currentOdo() - (Number(settings().deliveryOdo) || 0);
+export function costPerKm(vid = state.vid) {
+  const dist = currentOdo(vid) - (Number(settings(vid).deliveryOdo) || 0);
   if (dist <= 0) return { dist, fuel: null, upkeep: null };
-  const t = totals();
+  const t = totals(vid);
   return { dist, fuel: t.byType.fuel / dist, upkeep: t.upkeep / dist };
 }
 
 // メンテ時期のお知らせ
-export function reminders() {
-  const s = settings();
-  const odo = currentOdo();
+export function reminders(vid = state.vid) {
+  const s = settings(vid);
+  const odo = currentOdo(vid);
   const now = today();
-  const maint = active('maint');
+  const maint = active('maint', vid);
   return (s.reminders || []).map(rule => {
     const kw = (rule.keyword || rule.name || '').split('|').map(k => k.trim()).filter(Boolean);
     const hits = maint.filter(r => kw.some(k => (r.title || '').includes(k)))
@@ -209,9 +280,9 @@ export function reminders() {
 }
 
 // 月別・年別
-export function monthly() {
+export function monthly(vid = state.vid) {
   const map = {};
-  for (const r of active()) {
+  for (const r of active(null, vid)) {
     if (!COST_TYPES.includes(r.type) || !r.date) continue;
     const ym = r.date.slice(0, 7);
     map[ym] ??= Object.fromEntries(COST_TYPES.map(t => [t, 0]));
@@ -219,9 +290,9 @@ export function monthly() {
   }
   return map;
 }
-export function yearly() {
+export function yearly(vid = state.vid) {
   const map = {};
-  for (const r of active()) {
+  for (const r of active(null, vid)) {
     if (!COST_TYPES.includes(r.type)) continue;
     const y = r.date ? r.date.slice(0, 4) : '日付なし';
     map[y] ??= Object.fromEntries(COST_TYPES.map(t => [t, 0]));

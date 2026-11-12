@@ -1,6 +1,6 @@
 // オフライン用 Service Worker。アプリを更新したら VERSION を上げる
-const VERSION = 'jb7rc-0.1.0';
-const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/data.js', 'js/sync.js', 'js/excel.js',
+const VERSION = 'jb7rc-0.2.0';
+const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/data.js', 'js/sync.js', 'js/excel.js', 'js/receipt.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
 self.addEventListener('install', e => {

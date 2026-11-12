@@ -1,7 +1,9 @@
 import {
   APP_VERSION, CATS, COST_TYPES, state, load, save, saveSync, settings, updateSettings, active, upsert, remove, newRecord,
   evalAmount, today, totals, currentOdo, fuelStats, costPerKm, reminders, monthly, yearly, yen, num,
+  vehicles, setVehicle, addVehicle, deleteVehicle, fixCurrentVid, presetsForKind, remindersForKind,
 } from './data.js';
+import { readReceipt } from './receipt.js';
 import { syncNow, scheduleSync, onSyncChange, syncConfigured } from './sync.js';
 import { parseWorkbook, applyImport, exportWorkbook, exportJSON, importJSON } from './excel.js';
 
@@ -45,8 +47,14 @@ function syncPill() {
   const [cls, ic, label] = map[s.status] || map.off;
   return `<button class="sync-pill ${cls}" data-act="sync" title="${h(s.error)}">${icon(ic)}${label}</button>`;
 }
+function vehicleTabs() {
+  const vs = vehicles();
+  return `<div class="vtabs" role="tablist" aria-label="乗り物">${vs.map(v => `<button class="vtab ${v.id === state.vid ? 'active' : ''}" data-vid="${h(v.id)}" role="tab">
+    ${icon(v.kind === 'bike' ? 'ti-motorbike' : 'ti-car')}<span>${h(v.vehicleName)}</span></button>`).join('')}
+    <button class="vtab add" data-act="add-vehicle" aria-label="乗り物を追加">${icon('ti-plus')}</button></div>`;
+}
 function topbar(title) {
-  return `<div class="topbar"><h1>${h(title)}</h1>${syncPill()}</div>`;
+  return `<div class="topbar"><h1>${h(title)}</h1>${syncPill()}</div>${vehicleTabs()}`;
 }
 
 function subLine(r, fs) {
@@ -106,7 +114,11 @@ function renderHome() {
   }).join('') : '<div class="tiny">メンテ記録が入ると次回の目安を表示します</div>';
 
   $main.innerHTML = `
-    ${topbar(s.vehicleName)}
+    ${topbar('のりもの維持費')}
+    <div class="quick">
+      <button class="btn primary" data-act="receipt-camera">${icon('ti-camera')}レシートで給油登録</button>
+      <button class="btn" data-act="add-fuel">${icon('ti-gas-station')}給油を手入力</button>
+    </div>
     ${!hasData ? `<div class="card empty">${icon('ti-file-spreadsheet')}<p>まだ記録がありません</p>
       <div class="btn-row" style="justify-content:center"><button class="btn primary" data-act="import-xlsx">${icon('ti-upload')}Excelから取り込む</button>
       <button class="btn" data-act="add">${icon('ti-plus')}記録を追加</button></div></div>` : ''}
@@ -134,11 +146,24 @@ function renderHome() {
         <div class="tiny" style="text-align:center;margin-top:6px">納車から ${num(Math.max(cpk.dist, 0))}km 走行</div>
       </div>
     </div><div>
+      ${allVehiclesCard()}
       <div class="sec-title">次のメンテ目安</div>
       <div class="card">${remHtml}</div>
       <div class="sec-title h-row"><span>最近の記録</span><button class="btn" style="padding:3px 10px;font-size:12px" data-cat="all">すべて見る</button></div>
       ${recent.length ? recent.map(r => tlItem(r, fs)).join('') : '<div class="tiny" style="margin-left:4px">記録はまだありません</div>'}
     </div></div>`;
+}
+
+function allVehiclesCard() {
+  const vs = vehicles();
+  if (vs.length < 2) return '';
+  const rows = vs.map(v => ({ v, t: totals(v.id) }));
+  const sum = rows.reduce((a, r) => a + r.t.grand, 0);
+  return `<div class="sec-title">全乗り物の合計</div><div class="card">
+    ${rows.map(({ v, t }) => `<button class="veh-row ${v.id === state.vid ? 'active' : ''}" data-vid="${h(v.id)}">
+      <span>${icon(v.kind === 'bike' ? 'ti-motorbike' : 'ti-car')} ${h(v.vehicleName)}</span>
+      <span><b>${yen(t.grand)}</b><span class="tiny"> 維持費 ${yen(t.upkeep)}</span></span></button>`).join('')}
+    <div class="h-row" style="margin-top:6px"><span class="muted">合計</span><b>${yen(sum)}</b></div></div>`;
 }
 
 // ---------- 記録（タブ＋タイムライン B） ----------
@@ -273,13 +298,16 @@ function renderSettings() {
   const last = sy.lastSyncAt ? new Date(sy.lastSyncAt).toLocaleString('ja-JP') : '未同期';
   $main.innerHTML = `
     ${topbar('設定')}
-    <div class="sec-title">車両</div>
+    <div class="sec-title">乗り物の設定（${h(s.vehicleName)}）</div>
     <div class="card" data-form="vehicle">
-      <div class="field"><label>車両名</label><input name="vehicleName" value="${h(s.vehicleName)}"></div>
+      <div class="two"><div class="field"><label>名前</label><input name="vehicleName" value="${h(s.vehicleName)}"></div>
+      <div class="field"><label>種類</label><select name="kind"><option value="car" ${s.kind !== 'bike' ? 'selected' : ''}>車</option><option value="bike" ${s.kind === 'bike' ? 'selected' : ''}>バイク</option></select></div></div>
       <div class="two"><div class="field"><label>納車時の走行距離 (km)</label><input name="deliveryOdo" inputmode="numeric" value="${h(s.deliveryOdo)}"></div>
       <div class="field"><label>納車日</label><input name="deliveryDate" type="date" value="${h(s.deliveryDate)}"></div></div>
       <div class="two"><div class="field"><label>車両のみ支払総額（総額に加算）</label><input name="loanPaid" inputmode="numeric" value="${h(s.loanPaid)}"></div>
       <div class="field"><label>車両購入費用（参考）</label><input name="purchaseCost" inputmode="numeric" value="${h(s.purchaseCost)}"></div></div>
+      <div class="btn-row"><button class="btn" data-act="add-vehicle">${icon('ti-plus')}乗り物を追加</button>
+      ${vehicles().length > 1 ? `<button class="btn danger" data-act="delete-vehicle">${icon('ti-trash')}この乗り物を削除</button>` : ''}</div>
     </div>
 
     <div class="sec-title">メンテ時期のお知らせ</div>
@@ -310,7 +338,8 @@ function renderSettings() {
         <button class="btn" data-act="export-json">${icon('ti-download')}バックアップ</button>
         <button class="btn" data-act="import-json">${icon('ti-upload')}バックアップから復元</button>
       </div>
-      <div class="tiny" style="margin-top:8px">記録 ${active().length}件 · v${APP_VERSION}</div>
+      <div class="tiny" style="margin-top:8px">Excel の取り込み・書き出しは表示中の乗り物（${h(s.vehicleName)}）が対象です。ファイルは画面にドラッグ＆ドロップでも取り込めます。</div>
+      <div class="tiny" style="margin-top:4px">${h(s.vehicleName)} の記録 ${active().length}件 / 全体 ${active(null, '*').length}件 · v${APP_VERSION}</div>
     </div>`;
 }
 
@@ -332,7 +361,14 @@ function openForm(type, rec = null, opts = {}) {
     ${list ? `<datalist id="presets">${list.map(p => `<option value="${h(p)}">`).join('')}</datalist>` : ''}<div class="err" data-err="title"></div></div>`;
 
   const bodies = {
-    fuel: () => `<div class="two">${dateField('給油日')}${odoField()}</div>
+    fuel: () => `<div class="receipt-box" id="receipt-box">
+        <div class="btn-row">
+          <label class="btn primary">${icon('ti-camera')}レシートを撮影<input type="file" accept="image/*" capture="environment" data-receipt hidden></label>
+          <label class="btn">${icon('ti-photo')}写真から選ぶ<input type="file" accept="image/*" data-receipt hidden></label>
+        </div>
+        <div class="tiny" id="receipt-status">金額・給油量・日付を自動で入力します（PC は画像をここへドロップ）</div>
+      </div>
+      <div class="two">${dateField('給油日')}${odoField()}</div>
       <div class="two">${amountField('金額（円）')}<div class="field"><label>給油量 (L)</label><input name="liters" inputmode="decimal" value="${h(r.liters ?? '')}"><div class="err" data-err="liters"></div></div></div>
       <label class="check"><input type="checkbox" name="full" ${r.full !== false ? 'checked' : ''}>満タン給油（燃費計算に使う）</label>
       <div class="calc-preview" id="fuel-preview"></div>${noteField()}`,
@@ -378,6 +414,35 @@ function openForm(type, rec = null, opts = {}) {
     }
     p.textContent = bits.length ? bits.join(' · ') : 'ODO・金額・給油量を入れると単価と燃費を自動計算します';
   };
+  const runReceipt = async file => {
+    const st = $sheet.querySelector('#receipt-status');
+    if (!st || !file) return;
+    const box = $sheet.querySelector('#receipt-box');
+    box.classList.add('busy');
+    st.textContent = '読み取り中…（初回は部品のダウンロードに少し時間がかかります）';
+    try {
+      const res = await readReceipt(file, p => { st.textContent = `読み取り中… ${p}%`; });
+      const got = [];
+      if (res.amount) { form.amount.value = res.amount; got.push(`金額 ${yen(res.amount)}`); }
+      if (res.liters) { form.liters.value = res.liters; got.push(`給油量 ${res.liters}L`); }
+      if (res.date) { form.date.value = res.date; got.push(`日付 ${res.date}`); }
+      if (res.unit) got.push(`単価 ¥${res.unit}/L`);
+      st.innerHTML = got.length
+        ? `${icon('ti-check')} ${h(got.join(' · '))}<br><span class="${res.consistent ? '' : 'warn-text'}">${res.consistent ? '金額＝給油量×単価で検算OK。' : '数字を確認してください。'}ODO は手入力してください。</span>`
+        : `<span class="warn-text">読み取れませんでした。レシート全体を明るく正面から撮り直すか、手入力してください。</span>`;
+      st.title = res.text;
+      updatePreview();
+      if (!form.odo.value) form.odo.focus();
+    } catch (err) {
+      console.error(err);
+      st.innerHTML = `<span class="warn-text">${h(err.message)}</span>`;
+    } finally { box.classList.remove('busy'); }
+  };
+  $sheet.querySelectorAll('[data-receipt]').forEach(inp => inp.addEventListener('change', () => { runReceipt(inp.files[0]); inp.value = ''; }));
+  formReceiptHandler = type === 'fuel' ? runReceipt : null;
+  if (opts.receiptFile) runReceipt(opts.receiptFile);
+  if (opts.openCamera) setTimeout(() => $sheet.querySelector('[data-receipt][capture]')?.click(), 0);
+
   form.addEventListener('input', e => {
     const err = $sheet.querySelector(`[data-err="${e.target.name}"]`);
     if (err) err.textContent = '';
@@ -436,7 +501,8 @@ function openForm(type, rec = null, opts = {}) {
   };
   setTimeout(() => { const f = form.querySelector(type === 'fuel' ? '[name=odo]' : '[name=title]'); if (f && isNew && window.innerWidth > 700) f.focus(); }, 50);
 }
-function closeForm() { $sheet.hidden = true; $sheet.innerHTML = ''; document.body.style.overflow = ''; }
+let formReceiptHandler = null;
+function closeForm() { formReceiptHandler = null; $sheet.hidden = true; $sheet.innerHTML = ''; document.body.style.overflow = ''; }
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$sheet.hidden) closeForm(); });
 
 // ---------- 画面上の操作 ----------
@@ -449,18 +515,19 @@ function pickFile(accept) {
   });
 }
 
-async function importXlsx() {
-  const f = await pickFile('.xlsx,.xlsm');
+async function importXlsx(file) {
+  const f = file || await pickFile('.xlsx,.xlsm');
   if (!f) return;
+  const vname = settings().vehicleName;
   try {
     const res = await parseWorkbook(await f.arrayBuffer());
     const counts = Object.entries(CATS).map(([k, c]) => [c.label, res.records.filter(r => r.type === k).length]).filter(([, n]) => n).map(([l, n]) => `${l} ${n}件`).join('、');
     const sum = res.records.filter(r => COST_TYPES.includes(r.type)).reduce((a, r) => a + r.amount, 0);
-    let msg = `取り込み内容: ${counts || 'なし'}\n維持費合計 ${yen(sum)}${res.patch.loanPaid !== undefined ? ` / 車両支払総額 ${yen(res.patch.loanPaid)}` : ''}`;
+    let msg = `取り込み先: ${vname}\n取り込み内容: ${counts || 'なし'}\n維持費合計 ${yen(sum)}${res.patch.loanPaid !== undefined ? ` / 車両支払総額 ${yen(res.patch.loanPaid)}` : ''}`;
     if (res.warnings.length) msg += '\n注意: ' + res.warnings.join(' / ');
     let replace = false;
     if (active().length) {
-      if (!confirm(msg + `\n\n今ある記録 ${active().length}件を、取り込む内容で置き換えますか？\n（キャンセルで中止）`)) return;
+      if (!confirm(msg + `\n\n${vname} の今ある記録 ${active().length}件を、取り込む内容で置き換えますか？\n（他の乗り物の記録はそのまま。キャンセルで中止）`)) return;
       replace = true;
     } else if (!confirm(msg + '\n\n取り込みますか？')) return;
     applyImport(res, replace);
@@ -484,10 +551,19 @@ $main.addEventListener('click', async e => {
     if (a === 'to-settings') return go('settings');
     if (a === 'sync') {
       if (!syncConfigured()) return go('settings');
-      try { const r = await syncNow(); render(); toast(`同期しました（送信${r.pushed}件・更新${r.pulled}件）`); } catch (err) { render(); toast(state.sync.error, 4000); }
+      try { const r = await syncNow(); fixCurrentVid(); render(); toast(`同期しました（送信${r.pushed}件・更新${r.pulled}件）`); } catch (err) { render(); toast(state.sync.error, 4000); }
       return;
     }
     if (a === 'import-xlsx') return importXlsx();
+    if (a === 'receipt-camera') return openForm('fuel', null, { lockType: true, openCamera: true });
+    if (a === 'add-fuel') return openForm('fuel', null, { lockType: true });
+    if (a === 'add-vehicle') return openVehicleForm();
+    if (a === 'delete-vehicle') {
+      const s = settings();
+      const n = active().length;
+      if (!confirm(`「${s.vehicleName}」と、その記録 ${n}件を削除しますか？\n（他の端末からも消えます。元に戻せません）`)) return;
+      deleteVehicle(state.vid); changed(); toast('削除しました'); return;
+    }
     if (a === 'export-xlsx') { try { await exportWorkbook(); } catch (err) { alert(err.message); } return; }
     if (a === 'export-json') return exportJSON();
     if (a === 'import-json') {
@@ -506,6 +582,8 @@ $main.addEventListener('click', async e => {
     if (a === 'rem-add') { const s = settings(); updateSettings({ reminders: [...s.reminders, { name: '', keyword: '', km: 0, months: 0 }] }); changed(); return; }
     if (a === 'rem-del') { const i = Number(act.closest('.rem-row').dataset.i); const s = settings(); updateSettings({ reminders: s.reminders.filter((_, j) => j !== i) }); changed(); return; }
   }
+  const vt = e.target.closest('[data-vid]');
+  if (vt) { setVehicle(vt.dataset.vid); render(); return; }
   const cat = e.target.closest('[data-cat]');
   if (cat) return go('records', { cat: cat.dataset.cat });
   const tab = e.target.closest('[data-tab]');
@@ -523,7 +601,10 @@ $main.addEventListener('change', e => {
     const numeric = ['deliveryOdo', 'loanPaid', 'purchaseCost'];
     let v = e.target.value;
     if (numeric.includes(k)) { v = evalAmount(v).value; if (Number.isNaN(v)) { toast('数字で入力してください'); return; } }
-    updateSettings({ [k]: v }); scheduleSync(); toast('保存しました', 1200);
+    const patch = { [k]: v };
+    if (k === 'kind' && active('maint').length === 0) Object.assign(patch, { reminders: remindersForKind(v), maintPresets: presetsForKind(v) });
+    updateSettings(patch); scheduleSync(); toast('保存しました', 1200);
+    if (k === 'vehicleName' || k === 'kind') render();
     return;
   }
   const rr = e.target.closest('.rem-row');
@@ -546,6 +627,61 @@ $main.addEventListener('change', e => {
   }
 });
 
+// ---------- 乗り物の追加 ----------
+function openVehicleForm() {
+  $sheet.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><h2>乗り物を追加</h2>
+    <form id="veh-form" novalidate>
+      <div class="field"><label>名前</label><input name="name" placeholder="例: FL5 シビック"><div class="err" data-err="name"></div></div>
+      <div class="field"><label>種類</label><select name="kind"><option value="car">車</option><option value="bike">バイク</option></select></div>
+      <div class="field"><label>納車時の走行距離 (km)</label><input name="odo" inputmode="numeric" placeholder="0"></div>
+      <div class="btn-row"><span style="flex:1"></span><button type="button" class="btn" data-act="close">キャンセル</button>
+      <button type="submit" class="btn primary">${icon('ti-check')}追加</button></div></form></div>`;
+  $sheet.hidden = false;
+  const f = $sheet.querySelector('#veh-form');
+  $sheet.onclick = e => { if (e.target === $sheet || e.target.closest('[data-act=close]')) closeForm(); };
+  f.oninput = () => { $sheet.querySelector('[data-err=name]').textContent = ''; };
+  f.onsubmit = e => {
+    e.preventDefault();
+    const name = f.elements.name.value.trim();
+    if (!name) { $sheet.querySelector('[data-err=name]').textContent = '名前を入力してください'; return; }
+    const id = addVehicle(name, f.elements.kind.value);
+    setVehicle(id);
+    const odo = Number(String(f.elements.odo.value).replace(/[,\s]/g, ''));
+    if (odo) updateSettings({ deliveryOdo: odo }, id);
+    closeForm(); changed(); toast(`${name} を追加しました`);
+  };
+  setTimeout(() => f.elements.name.focus(), 50);
+}
+
+// ---------- ドラッグ＆ドロップ ----------
+const $drop = document.getElementById('drop');
+let dragDepth = 0;
+const hasFiles = e => [...(e.dataTransfer?.types || [])].includes('Files');
+window.addEventListener('dragenter', e => { if (!hasFiles(e)) return; e.preventDefault(); dragDepth++; $drop.hidden = false; });
+window.addEventListener('dragover', e => { if (hasFiles(e)) e.preventDefault(); });
+window.addEventListener('dragleave', e => { if (!hasFiles(e)) return; dragDepth = Math.max(0, dragDepth - 1); if (!dragDepth) $drop.hidden = true; });
+window.addEventListener('drop', async e => {
+  if (!hasFiles(e)) return;
+  e.preventDefault(); dragDepth = 0; $drop.hidden = true;
+  const file = e.dataTransfer.files[0];
+  if (!file) return;
+  await handleFile(file);
+});
+async function handleFile(file) {
+  const name = file.name.toLowerCase();
+  if (/\.(xlsx|xlsm)$/.test(name)) { closeForm(); return importXlsx(file); }
+  if (/\.json$/.test(name)) {
+    if (!confirm(`「${file.name}」の内容で、今の記録をすべて置き換えますか？`)) return;
+    try { importJSON(await file.text()); fixCurrentVid(); changed(); toast('復元しました'); } catch (err) { alert('復元できませんでした: ' + err.message); }
+    return;
+  }
+  if (file.type.startsWith('image/') || /\.(jpe?g|png|webp|heic)$/.test(name)) {
+    if (formReceiptHandler) return formReceiptHandler(file);
+    return openForm('fuel', null, { lockType: true, receiptFile: file });
+  }
+  toast('Excel（.xlsx）、バックアップ（.json）、レシート画像に対応しています', 3500);
+}
+
 function render() {
   document.querySelectorAll('#nav button[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === ui.view));
   ({ home: renderHome, records: renderRecords, stats: renderStats, settings: renderSettings }[ui.view] || renderHome)();
@@ -559,9 +695,9 @@ onSyncChange(() => {
 // ---------- 起動 ----------
 load();
 render();
-if (syncConfigured()) syncNow().then(r => { if (r?.pulled) render(); }).catch(() => {});
+if (syncConfigured()) syncNow().then(r => { if (r?.pulled) { fixCurrentVid(); render(); } }).catch(() => {});
 document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible' && syncConfigured()) syncNow().then(r => { if (r?.pulled) render(); }).catch(() => {});
+  if (document.visibilityState === 'visible' && syncConfigured()) syncNow().then(r => { if (r?.pulled) { fixCurrentVid(); render(); } }).catch(() => {});
 });
 if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW', err));

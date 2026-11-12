@@ -1,7 +1,7 @@
 {
-  "name": "JB7 ランニングコスト",
-  "short_name": "JB7コスト",
-  "description": "JB7 ライフの維持費・燃費・メンテナンス記録",
+  "name": "のりもの維持費",
+  "short_name": "維持費",
+  "description": "車・バイクの維持費・燃費・メンテナンス記録",
   "start_url": "./",
   "scope": "./",
   "display": "standalone",
