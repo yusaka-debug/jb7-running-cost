@@ -309,12 +309,19 @@ table.t th:first-child, table.t td:first-child { text-align: left; }
   main.view-home { max-width: 1360px; }
   .g-meta { display: flex; }
   .g-total { min-width: 150px; }
-  .g-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 16px; align-items: start; }
-  .mini-cats { grid-template-columns: repeat(6, minmax(0, 1fr)); }
-  .g-body .g-kpis { margin-top: 0; padding: 8px 0 0 16px; border-top: 0; border-left: 1px dashed var(--line); }
+  .g-body { display: grid; grid-template-columns: minmax(0, 1fr) 210px; gap: 16px; align-items: start; }
+  .mini-cats { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+  .mini-cat { padding: 10px 12px; gap: 3px; }
+  .mini-cat .lbl { font-size: 13px; }
+  .mini-cat .lbl i { font-size: 16px; }
+  .mini-cat b { font-size: 19px; }
+  /* 右側は小さくまとめる: 燃料費/km・維持費/km を横に並べ、その下に平均燃費 */
+  .g-body .g-kpis { margin-top: 0; padding: 4px 0 0 14px; border-top: 0; border-left: 1px dashed var(--line); grid-template-columns: 1fr 1fr; gap: 10px 6px; }
+  .g-body .g-kpis .v { font-size: 15px; }
+  .g-body .g-kpis > div:first-child { order: 3; grid-column: 1 / -1; }
   .g-item.active .g-detail { padding-left: 92px; }
 }
-@media (min-width: 900px) and (max-width: 1180px) { .mini-cats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
 
 .wareki-hint { margin-top: 3px; color: var(--text2); min-height: 1em; }
 .wareki-hint:empty { display: none; }
+@media (min-width: 1200px) { .g-body .mini-cats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
