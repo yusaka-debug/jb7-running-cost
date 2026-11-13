@@ -1,5 +1,5 @@
 // データ保存・モデル・計算ロジック
-export const APP_VERSION = '0.6.2';
+export const APP_VERSION = '0.6.3';
 
 export const CATS = {
   fuel:    { label: 'ガソリン',     short: '給油',     icon: 'ti-gas-station',  color: '#BA7517' },
@@ -141,6 +141,20 @@ function dedupeFuel() {
     byDay.get(key(r)).push(r);
   }
   let dirty = false;
+  // 距離ありどうしで「日付・距離・金額」が全く同じもの（手入力と取り込みの二重）は、どの端末でも同じ方が残るよう id の小さい方を残す
+  for (const day of byDay.values()) {
+    day.sort((a, b) => (a.id < b.id ? -1 : 1));
+    for (let i = day.length - 1; i > 0; i--) {
+      const r = day[i];
+      const keep = day.slice(0, i).find(x => x.odo === r.odo && (Number(x.amount) || 0) === (Number(r.amount) || 0));
+      if (!keep) continue;
+      if (r.note && !keep.note) { keep.note = r.note; keep.updatedAt = Date.now(); }
+      if (r.liters && !keep.liters) { keep.liters = r.liters; keep.updatedAt = Date.now(); }
+      r.deleted = true; r.updatedAt = Date.now();
+      day.splice(i, 1);
+      dirty = true;
+    }
+  }
   for (const r of state.records) {
     if (r.type !== 'fuel' || r.deleted || r.odo || !r.date) continue;
     const day = byDay.get(key(r));
