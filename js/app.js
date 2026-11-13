@@ -144,15 +144,15 @@ async function openSyncScanner() {
     errEl.textContent = ''; ov.querySelector('.scan-note').textContent = '写真を読み取っています…';
     try { found(await readQrFromFile(f)); } catch (err) { errEl.textContent = err.message; ov.querySelector('.scan-note').textContent = ''; }
   });
-  if (!cameraAvailable()) { ov.querySelector('.scan-note').textContent = 'この画面ではカメラを使えません。「写真から読み取る」を使ってください'; return; }
+  if (!cameraAvailable()) { ov.querySelector('.scan-note').textContent = 'この画面ではカメラを直接使えません。下の「写真から読み取る」→「写真を撮る」で QR を撮ってください'; return; }
   try {
     stop = await scanWithCamera(ov.querySelector('video'), found);
     if (done) stop();
     else ov.querySelector('.scan-note').textContent = '';
   } catch (err) {
     ov.querySelector('.scan-note').textContent = err.name === 'NotAllowedError'
-      ? 'カメラの使用が許可されていません。iPhone の設定で許可するか、「写真から読み取る」を使ってください'
-      : 'カメラを起動できませんでした。「写真から読み取る」を使ってください';
+      ? 'カメラの使用が許可されていません。下の「写真から読み取る」→「写真を撮る」で QR を撮ってください'
+      : `カメラを起動できませんでした（${err.name || ''} ${err.message || ''}）。下の「写真から読み取る」を使ってください`;
   }
 }
 

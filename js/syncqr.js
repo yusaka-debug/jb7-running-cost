@@ -81,12 +81,17 @@ export const cameraAvailable = () => !!navigator.mediaDevices?.getUserMedia;
  * 戻り値の stop() でカメラを止める。カメラが使えないときは例外
  */
 export async function scanWithCamera(video, onFound) {
-  const jsQR = await loadScript(JSQR_URL, 'jsQR');
-  const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
-  video.srcObject = stream;
+  // iPhone はボタンを押した直後に呼ばないと許可の確認が出ないことがあるので、カメラを先に要求し、部品の読み込みは並行で行う
+  const camP = navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+  const libP = loadScript(JSQR_URL, 'jsQR');
+  const timeout = new Promise((_, rej) => setTimeout(() => rej(Object.assign(new Error('カメラの応答がありません'), { name: 'TimeoutError' })), 15000));
+  const stream = await Promise.race([camP, timeout]);
+  const jsQR = await libP.catch(e => { stream.getTracks().forEach(t => t.stop()); throw e; });
   video.setAttribute('playsinline', '');
+  video.setAttribute('autoplay', '');
   video.muted = true;
-  await video.play();
+  video.srcObject = stream;
+  await video.play().catch(() => {});
   let stopped = false, timer = null;
   const stop = () => { stopped = true; clearTimeout(timer); stream.getTracks().forEach(t => t.stop()); video.srcObject = null; };
   const tick = () => {
