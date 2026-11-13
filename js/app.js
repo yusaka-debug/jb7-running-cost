@@ -9,7 +9,7 @@ import { syncNow, scheduleSync, onSyncChange, syncConfigured, loadFile } from '.
 import { storeFile, delBlob, discardFiles, fmtSize, isPdf, isImage, getBlob } from './files.js';
 import { readMaintDoc } from './docread.js';
 import { helpHtml } from './help.js';
-import { syncLink, parseSyncLink, qrSvg, readQrFromFile } from './syncqr.js';
+import { syncLink, parseSyncLink, qrSvg, readQrFromFile, scanWithCamera, cameraAvailable } from './syncqr.js';
 import { parseWorkbook, applyImport, exportWorkbook, exportJSON, importJSON } from './excel.js';
 
 const $main = document.getElementById('main');
@@ -89,7 +89,7 @@ async function showSyncQr() {
     <div class="qr-box">${icon('ti-loader-2 spin')}</div>
     <ol class="tiny qr-steps">
       <li>iPhone で、<b>ホーム画面のアイコン</b>からこのアプリを開く</li>
-      <li>設定 →「QRコードを読み取って設定」→「写真を撮る」でこの QR コードを撮る</li>
+      <li>設定 →「QRコードを読み取って設定」を押し、カメラをこの QR コードに向ける</li>
       <li>確認が出たら OK。自動で同期が始まります</li>
     </ol>
     <div class="tiny qr-warn">${icon('ti-lock')}合言葉が入っています。人に見せたり、写真を共有したりしないでください。</div>
@@ -112,6 +112,48 @@ function acceptSyncConfig(cfg, from) {
   go('settings');
   $main.querySelector('[data-form="sync"]')?.scrollIntoView({ block: 'center' });
   $main.querySelector('[data-form="sync"] [data-act="sync"]')?.click();
+}
+
+// カメラで QR を読み取る画面（カメラが使えなければ写真から）
+async function openSyncScanner() {
+  const ov = document.createElement('div');
+  ov.className = 'viewer qr-view';
+  ov.innerHTML = `<div class="qr-card qr-scan" role="dialog" aria-label="QR コードの読み取り">
+    <div class="h-row"><b>QR コードを読み取る</b><button class="btn" data-close>${icon('ti-x')}閉じる</button></div>
+    <div class="scan-box"><video playsinline muted></video><span class="scan-frame"></span><div class="scan-note tiny">カメラを準備しています…</div></div>
+    <div class="tiny">PC に表示した QR コードを、枠の中に大きく映してください。読み取れると自動で進みます。</div>
+    <label class="btn scan-photo">${icon('ti-photo')}写真から読み取る<input type="file" accept="image/*" hidden></label>
+    <div class="err" data-scan-err></div>
+  </div>`;
+  document.body.appendChild(ov);
+  let stop = null, done = false;
+  const close = () => { done = true; stop?.(); ov.remove(); };
+  const errEl = ov.querySelector('[data-scan-err]');
+  const found = text => {
+    if (done) return;
+    const cfg = parseSyncLink(text);
+    if (!cfg) { errEl.textContent = 'このアプリの同期設定の QR コードではありません'; return false; }
+    close();
+    acceptSyncConfig(cfg, 'QR コード');
+    return true;
+  };
+  ov.addEventListener('click', e => { if (e.target === ov || e.target.closest('[data-close]')) close(); });
+  ov.querySelector('.scan-photo input').addEventListener('change', async e => {
+    const f = e.target.files[0]; e.target.value = '';
+    if (!f) return;
+    errEl.textContent = ''; ov.querySelector('.scan-note').textContent = '写真を読み取っています…';
+    try { found(await readQrFromFile(f)); } catch (err) { errEl.textContent = err.message; ov.querySelector('.scan-note').textContent = ''; }
+  });
+  if (!cameraAvailable()) { ov.querySelector('.scan-note').textContent = 'この画面ではカメラを使えません。「写真から読み取る」を使ってください'; return; }
+  try {
+    stop = await scanWithCamera(ov.querySelector('video'), found);
+    if (done) stop();
+    else ov.querySelector('.scan-note').textContent = '';
+  } catch (err) {
+    ov.querySelector('.scan-note').textContent = err.name === 'NotAllowedError'
+      ? 'カメラの使用が許可されていません。iPhone の設定で許可するか、「写真から読み取る」を使ってください'
+      : 'カメラを起動できませんでした。「写真から読み取る」を使ってください';
+  }
 }
 
 async function scanSyncQr(file) {
@@ -680,9 +722,9 @@ function renderSettings() {
       ${syncMsgHtml()}
       <div class="qr-row">
         <button class="btn" data-act="sync-qr">${icon('ti-qrcode')}QRコードを表示（ほかの端末へ設定を渡す）</button>
-        <label class="btn">${icon('ti-scan')}QRコードを読み取って設定<input type="file" accept="image/*" data-sync-scan hidden></label>
+        <button class="btn" data-act="sync-scan">${icon('ti-scan')}QRコードを読み取って設定</button>
       </div>
-      <div class="tiny" style="margin-top:8px">設定済みの端末（PC）で QR コードを表示し、iPhone のホーム画面のアイコンから開いたアプリで「QRコードを読み取って設定」→ 写真を撮る、で設定が入ります。設定方法はリポジトリの SETUP.md を参照。</div>
+      <div class="tiny" style="margin-top:8px">設定済みの端末（PC）で QR コードを表示し、iPhone のホーム画面のアイコンから開いたアプリで「QRコードを読み取って設定」を押してカメラを向けると、設定が入ります。設定方法はリポジトリの SETUP.md を参照。</div>
     </div>
 
     <div class="sec-title">データ</div>
@@ -1110,6 +1152,7 @@ $main.addEventListener('click', async e => {
       return;
     }
     if (a === 'sync-qr') return showSyncQr();
+    if (a === 'sync-scan') return openSyncScanner();
     if (a === 'gen-token') {
       const t = Array.from(crypto.getRandomValues(new Uint8Array(18)), b => b.toString(16).padStart(2, '0')).join('');
       const inp = $main.querySelector('[data-form="sync"] [name="token"]');

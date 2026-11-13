@@ -1,5 +1,5 @@
 // オフライン用 Service Worker。アプリを更新したら VERSION を上げる
-const VERSION = 'jb7rc-0.7.0';
+const VERSION = 'jb7rc-0.7.1';
 const SHELL = ['./', 'index.html', 'css/app.css', 'js/app.js', 'js/data.js', 'js/sync.js', 'js/excel.js', 'js/receipt.js', 'js/files.js', 'js/docread.js', 'js/help.js', 'js/syncqr.js',
   'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 
