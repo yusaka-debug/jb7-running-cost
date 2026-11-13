@@ -220,6 +220,7 @@ function tlItem(r, fs) {
   return `<div class="tl-item" role="button" tabindex="0" style="--c:${c.color}" data-edit="${h(r.id)}">
     <div class="t"><span>${icon(c.icon)}<span>${h(title)}</span>${badges.map(b => `<span class="badge">${b}</span>`).join('')}</span><span>${yen(r.amount)}</span></div>
     ${r.type === 'plan' ? plan : `<div class="s">${h(subLine(r, fs))}</div>`}
+    ${r.type === 'custom' && /^https?:\/\//.test(r.extra?.link || '') ? `<div class="s"><a href="${h(r.extra.link)}" target="_blank" rel="noopener" data-stop>${icon('ti-shopping-cart')} 購入ページを開く（再購入）</a></div>` : ''}
     ${r.note ? `<div class="n">${h(r.note)}</div>` : ''}
   </div>`;
 }
@@ -779,7 +780,7 @@ function openForm(type, rec = null, opts = {}) {
       </div>
       ${titleField('実施項目', [...new Set([...(s.maintPresets || []), ...active('maint').map(x => x.title)])])}
       <div class="two">${dateField('実施日')}${odoField()}</div>${amountField('費用（円）')}${noteField()}`,
-    custom: () => `${titleField('商品名')}<div class="two">${dateField('購入日')}${amountField()}</div>${noteField()}`,
+    custom: () => `${titleField('商品名')}<div class="two">${dateField('購入日')}${amountField()}</div><div class="field"><label>購入ページのリンク（再購入用）</label><input name="link" type="url" inputmode="url" placeholder="https://…" value="${h(r.extra?.link)}"></div>${noteField()}`,
     doc: () => `${titleField('品名', ['任意保険', '自動車税', '車検', '重量税', '自賠責保険', '駐車場使用承諾書', '印鑑登録費用', '印鑑登録証発行費用'])}
       <div class="field"><label>区分・メモ（等級など）</label><input name="group" value="${h(r.group)}"></div>
       <div class="two">${dateField()}${amountField()}</div>${noteField()}`,
@@ -992,6 +993,7 @@ function openForm(type, rec = null, opts = {}) {
       if (!out.liters || !Number.isFinite(out.liters)) ok = err('liters', '給油量を入力してください');
     }
     if (type === 'plan') Object.assign(out.extra, { genre: form.genre.value.trim(), maker: form.maker.value.trim(), link: form.link.value.trim() });
+    if (type === 'custom') { const l = form.link.value.trim(); if (l) out.extra.link = l; else delete out.extra.link; }
     if (storing) ok = err('files', '添付ファイルを保存中です。少し待ってからもう一度「保存」を押してください');
     if (!ok) return;
     if (att.length) out.extra.files = att; else delete out.extra.files;
@@ -1077,7 +1079,7 @@ $main.addEventListener('click', async e => {
     if (a === 'bought') {
       e.stopPropagation();
       const p = state.records.find(x => x.id === act.dataset.id);
-      openForm('custom', null, { lockType: true, fromPlan: p.id, prefill: { title: p.title, amount: p.amount, note: [p.extra?.maker, p.note].filter(Boolean).join(' / ') } });
+      openForm('custom', null, { lockType: true, fromPlan: p.id, prefill: { title: p.title, amount: p.amount, note: [p.extra?.maker, p.note].filter(Boolean).join(' / '), extra: p.extra?.link ? { link: p.extra.link } : {} } });
       return;
     }
     if (a === 'del-plan') {

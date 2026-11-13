@@ -63,7 +63,10 @@ export async function parseWorkbook(arrayBuffer) {
     const title = str(val(cus, `B${r}`));
     if (!title) continue;
     const c = cell(cus, `C${r}`);
-    records.push(newRecord('custom', { title, amount: toNum(c && c.v) || 0, note: str(val(cus, `D${r}`)), extra: c && c.f ? { expr: c.f } : {} }));
+    const extra = c && c.f ? { expr: c.f } : {};
+    const link = str(val(cus, `F${r}`)) || str(cell(cus, `F${r}`)?.l?.Target);
+    if (link) extra.link = link;
+    records.push(newRecord('custom', { title, amount: toNum(c && c.v) || 0, date: serialToYmd(val(cus, `E${r}`)), note: str(val(cus, `D${r}`)), extra }));
   }
 
   const mt = sh('メンテナンス費用');
