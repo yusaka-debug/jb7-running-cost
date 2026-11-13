@@ -5,7 +5,7 @@ import {
   vehicles, setVehicle, addVehicle, deleteVehicle, fixCurrentVid, presetsForKind, remindersForKind, shakenInfo, shakenRequired,
 } from './data.js';
 import { readReceipt } from './receipt.js';
-import { syncNow, scheduleSync, onSyncChange, syncConfigured, loadFile } from './sync.js';
+import { syncNow, scheduleSync, flushSync, onSyncChange, syncConfigured, loadFile } from './sync.js';
 import { storeFile, delBlob, discardFiles, fmtSize, isPdf, isImage, getBlob } from './files.js';
 import { readMaintDoc } from './docread.js';
 import { helpHtml } from './help.js';
@@ -1283,6 +1283,9 @@ if (linkCfg) {
   history.replaceState(null, '', location.pathname + location.search);   // 合言葉をアドレス欄・履歴に残さない
   setTimeout(() => acceptSyncConfig(linkCfg, 'リンク'), 300);
 } else if (syncConfigured()) syncNow().then(r => { if (r?.pulled) { fixCurrentVid(); render(); } }).catch(() => {});
+// アプリを閉じる・ホーム画面に戻る・別のアプリへ切り替えるときに、未送信の記録をすぐ送る
+document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushSync(); });
+window.addEventListener('pagehide', () => flushSync());
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && syncConfigured()) syncNow().then(r => { if (r?.pulled) { fixCurrentVid(); render(); } }).catch(() => {});
 });

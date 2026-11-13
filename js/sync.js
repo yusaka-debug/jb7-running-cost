@@ -68,6 +68,26 @@ export async function syncNow() {
   return running;
 }
 
+/**
+ * アプリを閉じる・別のアプリへ切り替える直前に、まだ送っていない記録をすぐ送る。
+ * 画面が消えたあとも届くよう sendBeacon（無ければ keepalive の fetch）を使う。返事は受け取れないので、
+ * lastPush は進めず、次に開いたときの通常の同期でも同じ内容を送り直す（サーバーは新しい方だけ採用するので重複しない）。
+ */
+export function flushSync() {
+  if (!syncConfigured()) return false;
+  const changes = state.records.filter(r => (r.updatedAt || 0) > (state.sync.lastPush || 0));
+  if (!changes.length) return false;
+  clearTimeout(timer);
+  const body = JSON.stringify({ token: state.sync.token, action: 'sync', changes });
+  if (body.length > 60000) { syncNow().catch(() => {}); return true; }   // 送れる大きさを超えるときは通常の同期で
+  let sent = false;
+  try { sent = navigator.sendBeacon?.(state.sync.url, new Blob([body], { type: 'text/plain;charset=utf-8' })) || false; } catch {}
+  if (!sent) {
+    try { fetch(state.sync.url, { method: 'POST', body, keepalive: true, mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' } }).catch(() => {}); sent = true; } catch {}
+  }
+  return sent;
+}
+
 async function call(action, payload) {
   const res = await fetch(state.sync.url, {
     method: 'POST',
