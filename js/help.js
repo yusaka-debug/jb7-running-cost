@@ -128,6 +128,8 @@ export function helpHtml() {
     <div class="card">${remind}
       <p>「記録」画面の右側（スマホはメンテナンスのタブの上）とホームに表示します。前回はメンテ記録の<b>実施項目</b>に目安の言葉が入っている一番新しい記録です。
       距離・期間・言葉は <b>設定 → メンテ時期のお知らせ</b> で乗り物ごとに変えられます。</p>
+      <p><b>車検</b>は設定の「初度登録年月」（車検証に書いてある年月）か「車検の満了日」から計算します。満了日の<b>2か月前から車検を受けられる</b>ので、3か月前から「予約の準備を」、2か月前から「予約しましょう」とホームに表示します。
+      「Google カレンダーに登録」か「iPhone のカレンダー用」でカレンダーに入れておくと、アプリを開かなくても通知が来ます。250cc 以下のバイクなど車検が無い乗り物は、設定の「車検」が自動で「なし」になり、お知らせしません。</p>
       <div class="legend"><span class="rem over"><i class="ti ti-alert-triangle"></i>超過</span><span class="rem soon"><i class="ti ti-bell"></i>もうすぐ（500km か 30日以内）</span><span class="rem ok"><i class="ti ti-circle-check"></i>まだ大丈夫</span><span class="rem unknown"><i class="ti ti-help-circle"></i>記録なし</span></div></div>
 
     <h2 id="h-fuel">燃費の計算（満タン法）</h2>

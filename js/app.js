@@ -1,7 +1,7 @@
 import {
   APP_VERSION, CATS, COST_TYPES, state, load, save, saveSync, settings, updateSettings, active, upsert, remove, newRecord,
   evalAmount, today, totals, currentOdo, fuelStats, costPerKm, reminders, monthly, yearly, yen, num,
-  vehicles, setVehicle, addVehicle, deleteVehicle, fixCurrentVid, presetsForKind, remindersForKind,
+  vehicles, setVehicle, addVehicle, deleteVehicle, fixCurrentVid, presetsForKind, remindersForKind, shakenInfo, shakenRequired,
 } from './data.js';
 import { readReceipt } from './receipt.js';
 import { syncNow, scheduleSync, onSyncChange, syncConfigured, loadFile } from './sync.js';
@@ -125,10 +125,91 @@ function remRow(r) {
     <div class="rem-bar"><span style="width:${pct}%"></span></div>
     <div class="tiny">前回 ${fmtDate(r.last.date) || '日付なし'}${r.last.odo ? '・' + num(r.last.odo) + 'km' : ''}${next ? ' → 次回 ' + next : ''}</div></div></div>`;
 }
+// ---------- 車検 ----------
+function shakenNote(vid = state.vid) {
+  const k = shakenInfo(vid);
+  if (!k.required) return '車検の対象外です（記録・登録のみ）。お知らせはしません。';
+  if (!k.expiry) return '初度登録年月か満了日を入れると、車検を受けられる2か月前から予約のお知らせを出します。';
+  return `次の車検満了日：<b>${fmtDate(k.expiry)}</b>${k.approx ? '（初度登録からの目安。車検証の満了日を入れると正確になります）' : ''}・${fmtDate(k.canFrom)} から受けられます`;
+}
+function shakenMessage(k) {
+  if (k.status === 'over') return `満了日（${fmtDate(k.expiry)}）を${num(-k.daysLeft)}日過ぎています。車検証を確認してください`;
+  if (k.status === 'now') return `車検を受けられる期間です。予約しましょう（満了日 ${fmtDate(k.expiry)}・あと${num(k.daysLeft)}日）`;
+  if (k.status === 'soon') return `${fmtDate(k.canFrom)} から車検を受けられます。そろそろ予約の準備を（満了日 ${fmtDate(k.expiry)}）`;
+  return `満了日 ${fmtDate(k.expiry)}・${fmtDate(k.canFrom)} から受けられます`;
+}
+function shakenRow(vid = state.vid) {
+  const k = shakenInfo(vid);
+  if (!k.required) return '';
+  if (!k.expiry) return `<div class="rem unknown">${icon('ti-calendar-event')}<div class="rem-b"><div class="rem-top"><span class="rem-name">車検</span>
+    <button class="link" data-act="to-settings">${icon('ti-settings')}設定</button></div><div class="tiny">初度登録年月を設定すると時期をお知らせします</div></div></div>`;
+  const cls = { over: 'over', now: 'soon', soon: 'soon', ok: 'ok' }[k.status];
+  const pct = Math.max(0, Math.min(100, Math.round((1 - k.daysLeft / 730) * 100)));
+  return `<div class="rem ${cls}">${icon('ti-calendar-event')}<div class="rem-b">
+    <div class="rem-top"><span class="rem-name">車検${k.approx ? '（目安）' : ''}</span><span class="rem-left">${k.daysLeft >= 0 ? `あと${num(k.daysLeft)}日` : `${num(-k.daysLeft)}日超過`}</span></div>
+    <div class="rem-bar"><span style="width:${pct}%"></span></div>
+    <div class="tiny">${shakenMessage(k)}</div>
+    <div class="btn-row" style="margin-top:4px;gap:4px 12px"><button class="link" data-act="shaken-cal" data-cal="${h(vid)}">${icon('ti-calendar-plus')}Google カレンダーに登録</button>
+      <button class="link" data-act="shaken-ics" data-cal="${h(vid)}">${icon('ti-download')}iPhone のカレンダー用</button></div></div></div>`;
+}
+// ホーム上部：全乗り物の車検のお知らせ（3か月前から）
+function shakenBanners() {
+  return vehicles().map(v => ({ v, k: shakenInfo(v.id) })).filter(x => x.k.required && x.k.expiry && x.k.status !== 'ok')
+    .map(({ v, k }) => `<div class="alert ${k.status === 'over' ? 'over' : 'soon'} shaken-alert" role="button" data-vid="${h(v.id)}">${icon(k.status === 'over' ? 'ti-alert-triangle' : 'ti-calendar-event')}
+      <span><b>${h(v.vehicleName)} の車検</b>：${shakenMessage(k)}</span></div>`).join('');
+}
+const ymdCompact = s => s.replace(/-/g, '');
+function nextDay(ymd) { const d = new Date(ymd + 'T00:00:00'); d.setDate(d.getDate() + 1); return `${d.getFullYear()}${String(d.getMonth() + 1).padStart(2, '0')}${String(d.getDate()).padStart(2, '0')}`; }
+function shakenEvent(vid) {
+  const v = vehicles().find(x => x.id === vid), k = shakenInfo(vid);
+  return { name: v.vehicleName, title: `${v.vehicleName} 車検の予約`, date: k.canFrom, expiry: k.expiry,
+    details: `${v.vehicleName} の車検満了日は ${fmtDate(k.expiry)}${k.approx ? '（初度登録からの目安）' : ''}。この日から車検を受けられます。予約しましょう。（のりもの維持費）` };
+}
+function openShakenCalendar(vid) {
+  const ev = shakenEvent(vid);
+  const url = `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${encodeURIComponent(ev.title)}&dates=${ymdCompact(ev.date)}/${nextDay(ev.date)}&details=${encodeURIComponent(ev.details)}`;
+  window.open(url, '_blank', 'noopener');
+}
+function downloadShakenIcs(vid) {
+  const ev = shakenEvent(vid);
+  const esc = t => t.replace(/[\\,;]/g, m => '\\' + m);
+  const ics = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//norimono-ijihi//JP', 'BEGIN:VEVENT',
+    `UID:shaken-${vid}-${ymdCompact(ev.expiry)}@norimono-ijihi`, `DTSTAMP:${new Date().toISOString().replace(/[-:]/g, '').slice(0, 15)}Z`,
+    `DTSTART;VALUE=DATE:${ymdCompact(ev.date)}`, `DTEND;VALUE=DATE:${nextDay(ev.date)}`, `SUMMARY:${esc(ev.title)}`, `DESCRIPTION:${esc(ev.details)}`,
+    'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${esc(ev.title)}`, 'TRIGGER:PT9H', 'END:VALARM',
+    'BEGIN:VALARM', 'ACTION:DISPLAY', `DESCRIPTION:${esc(ev.title)}（2週間後から受けられます）`, 'TRIGGER:-P14DT-9H', 'END:VALARM',
+    'END:VEVENT', 'END:VCALENDAR'].join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([ics], { type: 'text/calendar' }));
+  a.download = `車検の予約_${ev.name}.ics`;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+}
+// アプリを開いたとき、車検の時期なら端末の通知を出す（許可済みのとき・1日1回）
+async function notifyShaken() {
+  if (!('Notification' in window) || Notification.permission !== 'granted') return;
+  let sent = {};
+  try { sent = JSON.parse(localStorage.getItem('jb7rc.notified') || '{}'); } catch {}
+  const now = today();
+  for (const v of vehicles()) {
+    const k = shakenInfo(v.id);
+    if (!k.required || !k.expiry || k.status === 'ok' || sent[v.id] === now) continue;
+    const title = `${v.vehicleName} の車検`, body = shakenMessage(k);
+    try {
+      const reg = await navigator.serviceWorker?.getRegistration?.();
+      if (reg?.showNotification) await reg.showNotification(title, { body, icon: 'icons/icon-192.png', tag: 'shaken-' + v.id });
+      else new Notification(title, { body, icon: 'icons/icon-192.png' });
+      sent[v.id] = now;
+    } catch (e) { console.warn('notify', e); }
+  }
+  try { localStorage.setItem('jb7rc.notified', JSON.stringify(sent)); } catch {}
+}
+
 function reminderPanel() {
   const rems = remSort(reminders());
   return `<div class="card rem-panel">
     <div class="h-row" style="margin-bottom:8px"><b>${icon('ti-tool')} 交換・点検の目安</b><span class="tiny">今 ${num(currentOdo())}km</span></div>
+    ${shakenRow()}
     ${rems.length ? rems.map(remRow).join('') : '<div class="tiny">目安が設定されていません</div>'}
     <div class="btn-row" style="margin-top:10px">
       <button class="btn primary sm" data-act="add-maint">${icon('ti-plus')}メンテを記録</button>
@@ -154,6 +235,7 @@ function renderHome() {
 
   $main.innerHTML = `
     ${topbar('のりもの維持費')}
+    ${shakenBanners()}
     <div class="quick">
       <button class="btn primary" data-act="receipt-camera">${icon('ti-camera')}レシートで給油登録</button>
       <button class="btn" data-act="add-fuel">${icon('ti-gas-station')}給油を手入力</button>
@@ -187,7 +269,7 @@ function renderHome() {
     </div><div>
       ${allVehiclesCard()}
       <div class="sec-title">次のメンテ目安</div>
-      <div class="card">${remHtml}</div>
+      <div class="card">${shakenRow()}${remHtml}</div>
       <div class="sec-title h-row"><span>最近の記録</span><button class="btn" style="padding:3px 10px;font-size:12px" data-cat="all">すべて見る</button></div>
       ${recent.length ? recent.map(r => tlItem(r, fs)).join('') : '<div class="tiny" style="margin-left:4px">記録はまだありません</div>'}
     </div></div>`;
@@ -251,28 +333,39 @@ function renderHelp() {
 }
 
 // ---------- 集計 ----------
-function barChart(months, data) {
-  const W = 640, H = 210, L = 44, B = 22, T = 10;
-  const totalsArr = months.map(m => COST_TYPES.reduce((a, k) => a + (data[m]?.[k] || 0), 0));
-  const max = Math.max(1, ...totalsArr);
+// 目盛り: 1・2・2.5・3・4・5 ×10^n で切りの良い最大値と間隔
+function niceScale(max, ticks = 4) {
+  const raw = Math.max(1, max) / ticks;
+  const p = Math.pow(10, Math.floor(Math.log10(raw)));
+  const step = [1, 2, 2.5, 3, 4, 5, 10].map(f => f * p).find(v => v >= raw);
+  return { step, top: step * ticks };
+}
+const man = v => { const x = v / 10000; return (Number.isInteger(x) ? x : x < 1 ? +x.toFixed(2) : +x.toFixed(1)) + '万'; };
+
+function barChart(months, data, cat = 'all') {
+  const W = 640, H = 220, L = 50, B = 22, T = 18;
+  const keys = cat === 'all' ? COST_TYPES : [cat];
+  const totalsArr = months.map(m => keys.reduce((a, k) => a + (data[m]?.[k] || 0), 0));
+  const { step: tick, top } = niceScale(Math.max(...totalsArr, 0));
   const step = (W - L - 6) / Math.max(1, months.length);
   const bw = Math.min(28, step * 0.7);
-  const nice = (() => { const p = Math.pow(10, Math.floor(Math.log10(max))); return Math.ceil(max / p) * p; })();
-  let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="月別の維持費">`;
+  let svg = `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="月別の${cat === 'all' ? '維持費' : CATS[cat].label}">`;
+  svg += `<text x="4" y="10">（万円）</text>`;
   for (let i = 0; i <= 4; i++) {
     const y = T + (H - T - B) * (1 - i / 4);
-    svg += `<line x1="${L}" x2="${W}" y1="${y}" y2="${y}" stroke="currentColor" stroke-opacity=".1"/><text x="${L - 4}" y="${y + 3}" text-anchor="end">${Math.round(nice * i / 4 / 1000)}k</text>`;
+    svg += `<line x1="${L}" x2="${W}" y1="${y}" y2="${y}" stroke="currentColor" stroke-opacity=".1"/><text x="${L - 4}" y="${y + 3}" text-anchor="end">${i ? man(tick * i) : '0'}</text>`;
   }
   months.forEach((m, i) => {
     const x = L + step * i + (step - bw) / 2;
     let y = H - B;
-    for (const k of COST_TYPES) {
+    for (const k of keys) {
       const v = data[m]?.[k] || 0;
       if (!v) continue;
-      const hgt = (H - T - B) * v / nice;
+      const hgt = (H - T - B) * v / top;
       y -= hgt;
       svg += `<rect x="${x}" y="${y}" width="${bw}" height="${hgt}" fill="${CATS[k].color}"><title>${m} ${CATS[k].label} ${yen(v)}</title></rect>`;
     }
+    if (cat !== 'all' && totalsArr[i] && months.length <= 14) svg += `<text x="${x + bw / 2}" y="${y - 4}" text-anchor="middle">${man(totalsArr[i])}</text>`;
     const lbl = months.length > 14 ? (m.endsWith('-01') || i === 0 ? m.slice(2, 4) + '/' + Number(m.slice(5)) : '') : Number(m.slice(5)) + '月';
     svg += `<text x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${lbl}</text>`;
   });
@@ -322,12 +415,29 @@ function renderStats() {
   const yearKeys = Object.keys(yr).sort((a, b) => (a === '日付なし') - (b === '日付なし') || a.localeCompare(b));
   const sumRow = k => yearKeys.reduce((a, y) => a + yr[y][k], 0);
 
+  const sc = COST_TYPES.includes(ui.statsCat) ? ui.statsCat : 'all';
+  const keys = sc === 'all' ? COST_TYPES : [sc];
+  const perMonth = months.map(m => ({ m, v: keys.reduce((a, k) => a + (mon[m]?.[k] || 0), 0) }));
+  const periodSum = perMonth.reduce((a, x) => a + x.v, 0);
+  const usedMonths = perMonth.filter(x => x.v > 0);
+  const maxM = usedMonths.reduce((a, x) => (x.v > (a?.v || 0) ? x : a), null);
+  const monthLabel = m => `${m.slice(0, 4)}年${Number(m.slice(5))}月`;
+
   $main.innerHTML = `
     ${topbar('集計')}
     <div class="tabs">${['all', ...years].map(y => `<button class="tab ${ui.statsYear === y ? 'active' : ''}" data-year="${y}">${y === 'all' ? '全期間' : y + '年'}</button>`).join('')}</div>
-    <div class="card"><div class="h-row"><span class="muted">月別の維持費</span><span class="tiny">日付のある記録のみ</span></div>
-      ${months.length ? barChart(months, mon) : '<div class="tiny">データがありません</div>'}
-      <div class="legend">${COST_TYPES.map(k => `<span style="--c:${CATS[k].color}">${CATS[k].label}</span>`).join('')}</div></div>
+    <div class="tabs cat-tabs">${['all', ...COST_TYPES].map(k => `<button class="tab ${sc === k ? 'active' : ''}" data-scat="${k}">${k === 'all' ? icon('ti-stack-2') + '全体（合算）' : `<i class="ti ${CATS[k].icon}" style="color:${CATS[k].color}" aria-hidden="true"></i>` + CATS[k].label}</button>`).join('')}</div>
+    <div class="card"><div class="h-row"><span class="muted">月別の${sc === 'all' ? '維持費（合算）' : CATS[sc].label}</span><span class="tiny">日付のある記録のみ</span></div>
+      <div class="kpis stat-kpis">
+        <div><div class="v">${yen(periodSum)}</div><div class="tiny">${ui.statsYear === 'all' ? '全期間' : ui.statsYear + '年'}の合計</div></div>
+        <div><div class="v">${months.length ? yen(Math.round(periodSum / months.length)) : '—'}</div><div class="tiny">月平均（${months.length}か月）</div></div>
+        <div><div class="v">${maxM ? yen(maxM.v) : '—'}</div><div class="tiny">最も多い月${maxM ? '：' + (ui.statsYear === 'all' ? maxM.m.slice(0, 4) + '/' : '') + Number(maxM.m.slice(5)) + '月' : ''}</div></div>
+      </div>
+      ${months.length ? barChart(months, mon, sc) : '<div class="tiny">データがありません</div>'}
+      ${sc === 'all' ? `<div class="legend">${COST_TYPES.map(k => `<button class="legend-btn" data-scat="${k}" style="--c:${CATS[k].color}">${CATS[k].label}</button>`).join('')}</div><div class="tiny" style="margin-top:4px">項目名を押すと、その項目だけの月別合計を表示します</div>` : ''}
+      ${sc !== 'all' && usedMonths.length ? `<details class="month-list"><summary>月ごとの金額（${usedMonths.length}か月）</summary><table class="t">
+        ${[...usedMonths].reverse().map(x => `<tr><td>${monthLabel(x.m)}</td><td>${yen(x.v)}</td></tr>`).join('')}</table></details>` : ''}
+    </div>
     <div class="card"><div class="muted" style="margin-bottom:6px">年別・カテゴリ別</div><div class="scroll-x"><table class="t">
       <tr><th>カテゴリ</th>${yearKeys.map(y => `<th>${h(y)}</th>`).join('')}<th>合計</th></tr>
       ${COST_TYPES.map(k => `<tr><td>${CATS[k].label}</td>${yearKeys.map(y => `<td>${yen(yr[y][k])}</td>`).join('')}<td>${yen(sumRow(k))}</td></tr>`).join('')}
@@ -352,6 +462,15 @@ function renderSettings() {
       <div class="field"><label>種類</label><select name="kind"><option value="car" ${s.kind !== 'bike' ? 'selected' : ''}>車</option><option value="bike" ${s.kind === 'bike' ? 'selected' : ''}>バイク</option></select></div></div>
       <div class="two"><div class="field"><label>納車時の走行距離 (km)</label><input name="deliveryOdo" inputmode="numeric" value="${h(s.deliveryOdo)}"></div>
       <div class="field"><label>納車日</label><input name="deliveryDate" type="date" value="${h(s.deliveryDate)}"></div></div>
+      <div class="two"><div class="field"><label>初度登録年月（車検証）</label><input name="firstReg" type="month" value="${h(s.firstReg || '')}"></div>
+      <div class="field"><label>車検の満了日（車検証。分かれば）</label><input name="shakenExpiry" type="date" value="${h(s.shakenExpiry || '')}"></div></div>
+      <div class="two"><div class="field"><label>排気量 (cc)</label><input name="displacement" inputmode="numeric" placeholder="${s.kind === 'bike' ? '例: 250' : '例: 658'}" value="${h(s.displacement ?? '')}"></div>
+      <div class="field"><label>車検</label><select name="shaken">
+        <option value="" ${!s.shaken ? 'selected' : ''}>自動（${s.kind === 'bike' && !(Number(s.displacement) > 250) ? 'なし：250cc以下のバイク' : 'あり'}）</option>
+        <option value="yes" ${s.shaken === 'yes' ? 'selected' : ''}>あり（お知らせする）</option>
+        <option value="no" ${s.shaken === 'no' ? 'selected' : ''}>なし（登録のみ）</option></select></div></div>
+      <div class="tiny" style="margin:-4px 0 12px">${shakenNote()}
+        ${shakenRequired() ? `<br>${'Notification' in window && Notification.permission === 'granted' ? '端末の通知：許可済み（アプリを開いたときに通知）' : `<button class="link" data-act="notify-perm">${icon('ti-bell')}端末の通知を許可する</button>（アプリを開いたときに通知）`}` : ''}</div>
       <div class="two"><div class="field"><label>車両のみ支払総額（総額に加算）</label><input name="loanPaid" inputmode="numeric" value="${h(s.loanPaid)}"></div>
       <div class="field"><label>車両購入費用（参考）</label><input name="purchaseCost" inputmode="numeric" value="${h(s.purchaseCost)}"></div></div>
       <div class="btn-row"><button class="btn" data-act="add-vehicle">${icon('ti-plus')}乗り物を追加</button>
@@ -731,6 +850,15 @@ $main.addEventListener('click', async e => {
     }
     if (a === 'add') return openForm(ui.view === 'records' && ui.cat !== 'all' ? ui.cat : 'fuel');
     if (a === 'add-maint') return openForm('maint');
+    if (a === 'shaken-cal') return openShakenCalendar(act.dataset.cal);
+    if (a === 'shaken-ics') return downloadShakenIcs(act.dataset.cal);
+    if (a === 'notify-perm') {
+      if (!('Notification' in window)) { alert('この端末・ブラウザでは通知が使えません。カレンダーへの登録を使ってください。'); return; }
+      const r = await Notification.requestPermission();
+      toast(r === 'granted' ? '通知を許可しました' : '通知は許可されませんでした');
+      if (r === 'granted') notifyShaken();
+      render(); return;
+    }
     if (a === 'rem-record') return openForm('maint', null, { prefill: { title: act.dataset.name } });
     if (a === 'help-to') { const el = $main.querySelector('#' + act.dataset.to); if (el) el.scrollIntoView({ behavior: 'smooth' }); return; }
     if (a === 'to-settings') return go('settings');
@@ -775,6 +903,8 @@ $main.addEventListener('click', async e => {
   if (tab) { ui.cat = tab.dataset.tab; go('records'); return; }
   const yr = e.target.closest('[data-year]');
   if (yr) { ui.statsYear = yr.dataset.year; render(); return; }
+  const scat = e.target.closest('[data-scat]');
+  if (scat) { ui.statsCat = scat.dataset.scat; try { sessionStorage.setItem('jb7.ui', JSON.stringify(ui)); } catch {} render(); return; }
   const ed = e.target.closest('[data-edit]');
   if (ed) { const r = state.records.find(x => x.id === ed.dataset.edit); if (r) openForm(r.type, r); }
 });
@@ -783,13 +913,13 @@ $main.addEventListener('change', e => {
   const vf = e.target.closest('[data-form="vehicle"]');
   if (vf) {
     const k = e.target.name;
-    const numeric = ['deliveryOdo', 'loanPaid', 'purchaseCost'];
+    const numeric = ['deliveryOdo', 'loanPaid', 'purchaseCost', 'displacement'];
     let v = e.target.value;
     if (numeric.includes(k)) { v = evalAmount(v).value; if (Number.isNaN(v)) { toast('数字で入力してください'); return; } }
     const patch = { [k]: v };
     if (k === 'kind' && active('maint').length === 0) Object.assign(patch, { reminders: remindersForKind(v), maintPresets: presetsForKind(v) });
     updateSettings(patch); scheduleSync(); toast('保存しました', 1200);
-    if (k === 'vehicleName' || k === 'kind') render();
+    if (['vehicleName', 'kind', 'firstReg', 'shakenExpiry', 'displacement', 'shaken'].includes(k)) render();
     return;
   }
   const rr = e.target.closest('.rem-row');
@@ -892,5 +1022,6 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:') {
   navigator.serviceWorker.register('sw.js').catch(err => console.warn('SW', err));
 }
 if (navigator.storage?.persist) navigator.storage.persist().catch(() => {});
+setTimeout(() => notifyShaken(), 1500);
 // テスト・デバッグ用
 window.__jb7 = { state, parseWorkbook, applyImport, render, syncNow };

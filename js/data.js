@@ -1,5 +1,5 @@
 // データ保存・モデル・計算ロジック
-export const APP_VERSION = '0.4.0';
+export const APP_VERSION = '0.5.0';
 
 export const CATS = {
   fuel:    { label: 'ガソリン',     short: '給油',     icon: 'ti-gas-station',  color: '#BA7517' },
@@ -44,7 +44,6 @@ const REMINDERS = {
     { name: 'ワイパーゴム', keyword: 'ワイパー', km: 0, months: 12 },
     { name: 'バッテリー', keyword: 'バッテリー', km: 0, months: 36 },
     { name: '12か月点検', keyword: '12か月点検|12ヶ月点検|法定点検|車検', km: 0, months: 12 },
-    { name: '車検', keyword: '車検', km: 0, months: 24 },
   ],
   bike: [
     { name: 'エンジンオイル', keyword: 'オイル', km: 3000, months: 6 },
@@ -66,7 +65,7 @@ export const DEFAULT_VEHICLE = {
 const BUILTIN_VEHICLES = {
   'settings':      { vehicleName: 'JB7 ライフ', kind: 'car', order: 0, deliveryOdo: 60000, reminders: [{ name: 'エンジンオイル', keyword: 'オイル', km: 3000, months: 6 }, ...REMINDERS.car.slice(1)], maintPresets: JB7_MAINT_PRESETS, remindersV: REMINDERS_V },
   'settings-fl5':  { vehicleName: 'FL5', kind: 'car', order: 1, reminders: REMINDERS.car, maintPresets: CAR_MAINT_PRESETS, remindersV: REMINDERS_V },
-  'settings-mc51': { vehicleName: 'MC51', kind: 'bike', order: 2, reminders: REMINDERS.bike, maintPresets: BIKE_MAINT_PRESETS, remindersV: REMINDERS_V },
+  'settings-mc51': { vehicleName: 'MC51', kind: 'bike', order: 2, displacement: 250, reminders: REMINDERS.bike, maintPresets: BIKE_MAINT_PRESETS, remindersV: REMINDERS_V },
 };
 export const presetsForKind = kind => kind === 'bike' ? BIKE_MAINT_PRESETS : CAR_MAINT_PRESETS;
 export const remindersForKind = kind => REMINDERS[kind] || REMINDERS.car;
@@ -232,6 +231,44 @@ export function daysBetween(a, b) {
   return Math.round((new Date(b + 'T00:00:00') - new Date(a + 'T00:00:00')) / 86400000);
 }
 
+// ---------- 車検 ----------
+const ymdOf = dt => `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+
+/** 車検が必要か。設定 shaken='yes'/'no'、未設定なら 車＝必要、バイク＝251cc以上なら必要 */
+export function shakenRequired(vid = state.vid) {
+  const s = settings(vid);
+  if (s.shaken === 'yes') return true;
+  if (s.shaken === 'no') return false;
+  return s.kind !== 'bike' || Number(s.displacement) > 250;
+}
+
+/**
+ * 次の車検満了日と、お知らせの状態。
+ * 車検証の満了日（shakenExpiry）があればそれを基準に、無ければ初度登録年月（firstReg）＋3年（以後2年ごと）を目安にする。
+ * 満了日の前後3か月に「車検」の記録があれば済んだものとして次の回へ進む。
+ * status: over=満了日を過ぎた / now=受けられる期間（満了2か月前〜） / soon=3か月前〜（予約の準備） / ok
+ */
+export function shakenInfo(vid = state.vid) {
+  const s = settings(vid);
+  if (!shakenRequired(vid)) return { required: false };
+  let base = s.shakenExpiry || '', approx = false;
+  if (!base && /^\d{4}-\d{2}$/.test(s.firstReg || '')) {
+    const [y, m] = s.firstReg.split('-').map(Number);
+    base = ymdOf(new Date(y + 3, m, 0));   // 登録日が分からないので、3年後の登録月の末日を目安にする
+    approx = true;
+  }
+  if (!base) return { required: true, expiry: null };
+  const now = today();
+  const done = state.records.filter(r => !r.deleted && (r.type === 'maint' || r.type === 'doc') && vidOf(r) === vid && r.date && /車検|継続検査/.test(r.title || '')).map(r => r.date);
+  const isDone = E => done.some(d => d >= addMonths(E, -3) && d <= addMonths(E, 3));
+  let E = base;
+  for (let i = 0; i < 60 && (isDone(E) || E < addMonths(now, -3)); i++) E = addMonths(E, 24);
+  const daysLeft = daysBetween(now, E);
+  const canFrom = addMonths(E, -2);
+  const status = daysLeft < 0 ? 'over' : now >= canFrom ? 'now' : now >= addMonths(E, -3) ? 'soon' : 'ok';
+  return { required: true, expiry: E, approx, daysLeft, canFrom, status };
+}
+
 // ---------- 集計（すべて乗り物単位。vid 省略時は表示中の乗り物） ----------
 export function sumOf(type, vid = state.vid) {
   return active(type, vid).reduce((s, r) => s + (Number(r.amount) || 0), 0);
@@ -294,7 +331,7 @@ export function reminders(vid = state.vid) {
   const odo = currentOdo(vid);
   const now = today();
   const maint = active('maint', vid);
-  return (s.reminders || []).map(rule => {
+  return (s.reminders || []).filter(rule => rule.name !== '車検').map(rule => {
     const kw = (rule.keyword || rule.name || '').split('|').map(k => k.trim()).filter(Boolean);
     const hits = maint.filter(r => kw.some(k => (r.title || '').includes(k)))
       .sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.odo || 0) - (a.odo || 0));
