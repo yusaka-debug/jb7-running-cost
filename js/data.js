@@ -1,5 +1,5 @@
 // データ保存・モデル・計算ロジック
-export const APP_VERSION = '0.6.5';
+export const APP_VERSION = '0.6.6';
 
 export const CATS = {
   fuel:    { label: 'ガソリン',     short: '給油',     icon: 'ti-gas-station',  color: '#BA7517' },
@@ -415,6 +415,31 @@ export function yearly(vid = state.vid) {
     map[y][r.type] += Number(r.amount) || 0;
   }
   return map;
+}
+
+// ---------- 和暦 ----------
+const ERAS = [['令和', 2019, 5, 1], ['平成', 1989, 1, 8], ['昭和', 1926, 12, 25], ['大正', 1912, 7, 30], ['明治', 1868, 1, 25]];
+/** 和暦の年（例: 令和8年）。月日を省くとその年の年末で判定（2019年 → 令和元年） */
+export function wareki(y, m = 12, d = 31) {
+  y = Number(y); if (!y) return '';
+  const key = y * 10000 + m * 100 + d;
+  const era = ERAS.find(([, ey, em, ed]) => key >= ey * 10000 + em * 100 + ed);
+  if (!era) return '';
+  const n = y - era[1] + 1;
+  return `${era[0]}${n === 1 ? '元' : n}年`;
+}
+const ymdParts = v => String(v || '').split('-').map(Number);
+/** 2026年（令和8年） */
+export const fmtYear = y => y ? `${y}年（${wareki(y)}）` : '';
+/** 2026年（令和8年）4月 */
+export function fmtYM(ym) { const [y, m] = ymdParts(ym); return y && m ? `${y}年（${wareki(y, m, 28)}）${m}月` : ''; }
+/** 2026/4/6（令和8年） */
+export function fmtDate(ymd) { const [y, m, d] = ymdParts(ymd); return y && m && d ? `${y}/${m}/${d}（${wareki(y, m, d)}）` : ''; }
+/** 入力欄の値（YYYY-MM-DD / YYYY-MM）の和暦表記 */
+export function warekiOf(v) {
+  const [y, m, d] = ymdParts(v);
+  if (!y || !m) return '';
+  return d ? `${wareki(y, m, d)}${m}月${d}日` : `${wareki(y, m, 28)}${m}月`;
 }
 
 export const yen = n => (n === null || n === undefined || Number.isNaN(n)) ? '—' : '¥' + Math.round(n).toLocaleString('ja-JP');

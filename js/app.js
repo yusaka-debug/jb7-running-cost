@@ -1,6 +1,7 @@
 import {
   APP_VERSION, CATS, COST_TYPES, state, load, save, saveSync, settings, updateSettings, active, upsert, remove, newRecord,
   evalAmount, today, totals, currentOdo, fuelStats, costPerKm, reminders, monthly, yearly, yen, num,
+  wareki, fmtYear, fmtYM, fmtDate, warekiOf,
   vehicles, setVehicle, addVehicle, deleteVehicle, fixCurrentVid, presetsForKind, remindersForKind, shakenInfo, shakenRequired,
 } from './data.js';
 import { readReceipt } from './receipt.js';
@@ -35,6 +36,15 @@ function go(view, opts = {}) {
 document.getElementById('nav').addEventListener('click', e => {
   const b = e.target.closest('button[data-view]');
   if (b) go(b.dataset.view);
+});
+
+// 日付入力欄の下に和暦を添える（入力に合わせて更新）
+const warekiHint = v => `<div class="tiny wareki-hint" data-wareki-hint>${h(warekiOf(v))}</div>`;
+document.addEventListener('input', e => {
+  const t = e.target;
+  if (!(t instanceof HTMLInputElement) || !['date', 'month'].includes(t.type)) return;
+  const hint = t.parentElement?.querySelector('[data-wareki-hint]');
+  if (hint) hint.textContent = warekiOf(t.value);
 });
 
 function changed() { render(); scheduleSync(); }
@@ -126,7 +136,6 @@ function sortRecords(list) {
 }
 
 // ---------- 交換・点検の目安 ----------
-const fmtDate = d => d ? `${d.slice(0, 4)}/${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}` : '';
 function remLeft(r) {
   const bits = [];
   if (r.remainKm !== null) bits.push(r.remainKm >= 0 ? `あと${num(r.remainKm)}km` : `${num(-r.remainKm)}km超過`);
@@ -420,7 +429,7 @@ function renderRecords() {
     const g = groups[idx[key]]; g.items.push(r); g.sum += Number(r.amount) || 0;
   }
   groups.sort((a, b) => (a.key === 'none') - (b.key === 'none'));
-  const label = k => k === 'none' ? '日付未設定' : k === 'plan' ? '欲しい物リスト' : `${k.slice(0, 4)}年${Number(k.slice(5, 7))}月`;
+  const label = k => k === 'none' ? '日付未設定' : k === 'plan' ? '欲しい物リスト' : fmtYM(k);
 
   let extra = '';
   if (ui.cat === 'fuel') {
@@ -479,11 +488,11 @@ function barChart(months, data, cat = 'all') {
       if (!v) continue;
       const hgt = (H - T - B) * v / top;
       y -= hgt;
-      svg += `<rect x="${x}" y="${y}" width="${bw}" height="${hgt}" fill="${CATS[k].color}"><title>${m} ${CATS[k].label} ${yen(v)}</title></rect>`;
+      svg += `<rect x="${x}" y="${y}" width="${bw}" height="${hgt}" fill="${CATS[k].color}"><title>${fmtYM(m)} ${CATS[k].label} ${yen(v)}</title></rect>`;
     }
     if (cat !== 'all' && totalsArr[i] && months.length <= 14) svg += `<text x="${x + bw / 2}" y="${y - 4}" text-anchor="middle">${man(totalsArr[i])}</text>`;
-    const lbl = months.length > 14 ? (m.endsWith('-01') || i === 0 ? m.slice(2, 4) + '/' + Number(m.slice(5)) : '') : Number(m.slice(5)) + '月';
-    svg += `<text x="${x + bw / 2}" y="${H - 6}" text-anchor="middle">${lbl}</text>`;
+    const lbl = months.length > 14 ? (m.endsWith('-01') || (i === 0 && Number(m.slice(5)) <= 8) ? fmtYear(m.slice(0, 4)) : '') : Number(m.slice(5)) + '月';
+    svg += `<text x="${months.length > 14 ? x : x + bw / 2}" y="${H - 6}" text-anchor="${months.length > 14 ? 'start' : 'middle'}">${lbl}</text>`;
   });
   return svg + '</svg>';
 }
@@ -537,17 +546,17 @@ function renderStats() {
   const periodSum = perMonth.reduce((a, x) => a + x.v, 0);
   const usedMonths = perMonth.filter(x => x.v > 0);
   const maxM = usedMonths.reduce((a, x) => (x.v > (a?.v || 0) ? x : a), null);
-  const monthLabel = m => `${m.slice(0, 4)}年${Number(m.slice(5))}月`;
+  const monthLabel = fmtYM;
 
   $main.innerHTML = `
     ${topbar('集計')}
-    <div class="tabs">${['all', ...years].map(y => `<button class="tab ${ui.statsYear === y ? 'active' : ''}" data-year="${y}">${y === 'all' ? '全期間' : y + '年'}</button>`).join('')}</div>
+    <div class="tabs">${['all', ...years].map(y => `<button class="tab ${ui.statsYear === y ? 'active' : ''}" data-year="${y}">${y === 'all' ? '全期間' : fmtYear(y)}</button>`).join('')}</div>
     <div class="tabs cat-tabs">${['all', ...COST_TYPES].map(k => `<button class="tab ${sc === k ? 'active' : ''}" data-scat="${k}">${k === 'all' ? icon('ti-stack-2') + '全体（合算）' : `<i class="ti ${CATS[k].icon}" style="color:${CATS[k].color}" aria-hidden="true"></i>` + CATS[k].label}</button>`).join('')}</div>
     <div class="card"><div class="h-row"><span class="muted">月別の${sc === 'all' ? '維持費（合算）' : CATS[sc].label}</span><span class="tiny">日付のある記録のみ</span></div>
       <div class="kpis stat-kpis">
-        <div><div class="v">${yen(periodSum)}</div><div class="tiny">${ui.statsYear === 'all' ? '全期間' : ui.statsYear + '年'}の合計</div></div>
+        <div><div class="v">${yen(periodSum)}</div><div class="tiny">${ui.statsYear === 'all' ? '全期間' : fmtYear(ui.statsYear)}の合計</div></div>
         <div><div class="v">${months.length ? yen(Math.round(periodSum / months.length)) : '—'}</div><div class="tiny">月平均（${months.length}か月）</div></div>
-        <div><div class="v">${maxM ? yen(maxM.v) : '—'}</div><div class="tiny">最も多い月${maxM ? '：' + (ui.statsYear === 'all' ? maxM.m.slice(0, 4) + '/' : '') + Number(maxM.m.slice(5)) + '月' : ''}</div></div>
+        <div><div class="v">${maxM ? yen(maxM.v) : '—'}</div><div class="tiny">最も多い月${maxM ? '：' + fmtYM(maxM.m) : ''}</div></div>
       </div>
       ${months.length ? barChart(months, mon, sc) : '<div class="tiny">データがありません</div>'}
       ${sc === 'all' ? `<div class="legend">${COST_TYPES.map(k => `<button class="legend-btn" data-scat="${k}" style="--c:${CATS[k].color}">${CATS[k].label}</button>`).join('')}</div><div class="tiny" style="margin-top:4px">項目名を押すと、その項目だけの月別合計を表示します</div>` : ''}
@@ -555,7 +564,7 @@ function renderStats() {
         ${[...usedMonths].reverse().map(x => `<tr><td>${monthLabel(x.m)}</td><td>${yen(x.v)}</td></tr>`).join('')}</table></details>` : ''}
     </div>
     <div class="card"><div class="muted" style="margin-bottom:6px">年別・カテゴリ別</div><div class="scroll-x"><table class="t">
-      <tr><th>カテゴリ</th>${yearKeys.map(y => `<th>${h(y)}</th>`).join('')}<th>合計</th></tr>
+      <tr><th>カテゴリ</th>${yearKeys.map(y => `<th>${h(y === '日付なし' ? y : fmtYear(y))}</th>`).join('')}<th>合計</th></tr>
       ${COST_TYPES.map(k => `<tr><td>${CATS[k].label}</td>${yearKeys.map(y => `<td>${yen(yr[y][k])}</td>`).join('')}<td>${yen(sumRow(k))}</td></tr>`).join('')}
       <tr><th>計</th>${yearKeys.map(y => `<th>${yen(COST_TYPES.reduce((a, k) => a + yr[y][k], 0))}</th>`).join('')}<th>${yen(COST_TYPES.reduce((a, k) => a + sumRow(k), 0))}</th></tr>
     </table></div></div>
@@ -569,7 +578,8 @@ function renderStats() {
 function renderSettings() {
   const s = settings();
   const sy = state.sync;
-  const last = sy.lastSyncAt ? new Date(sy.lastSyncAt).toLocaleString('ja-JP') : '未同期';
+  const lastD = sy.lastSyncAt ? new Date(sy.lastSyncAt) : null;
+  const last = lastD ? `${lastD.toLocaleString('ja-JP')}（${wareki(lastD.getFullYear(), lastD.getMonth() + 1, lastD.getDate())}）` : '未同期';
   $main.innerHTML = `
     ${topbar('設定')}
     <div class="sec-title">乗り物の設定（${h(s.vehicleName)}）</div>
@@ -583,9 +593,9 @@ function renderSettings() {
       <div class="two"><div class="field"><label>名前</label><input name="vehicleName" value="${h(s.vehicleName)}"></div>
       <div class="field"><label>種類</label><select name="kind"><option value="car" ${s.kind !== 'bike' ? 'selected' : ''}>車</option><option value="bike" ${s.kind === 'bike' ? 'selected' : ''}>バイク</option></select></div></div>
       <div class="two"><div class="field"><label>納車時の走行距離 (km)</label><input name="deliveryOdo" inputmode="numeric" value="${h(s.deliveryOdo)}"></div>
-      <div class="field"><label>納車日</label><input name="deliveryDate" type="date" value="${h(s.deliveryDate)}"></div></div>
-      <div class="two"><div class="field"><label>初度登録年月（車検証）</label><input name="firstReg" type="month" value="${h(s.firstReg || '')}"></div>
-      <div class="field"><label>車検の満了日（車検証。分かれば）</label><input name="shakenExpiry" type="date" value="${h(s.shakenExpiry || '')}"></div></div>
+      <div class="field"><label>納車日</label><input name="deliveryDate" type="date" value="${h(s.deliveryDate)}">${warekiHint(s.deliveryDate)}</div></div>
+      <div class="two"><div class="field"><label>初度登録年月（車検証）</label><input name="firstReg" type="month" value="${h(s.firstReg || '')}">${warekiHint(s.firstReg)}</div>
+      <div class="field"><label>車検の満了日（車検証。分かれば）</label><input name="shakenExpiry" type="date" value="${h(s.shakenExpiry || '')}">${warekiHint(s.shakenExpiry)}</div></div>
       <div class="two"><div class="field"><label>排気量 (cc)</label><input name="displacement" inputmode="numeric" placeholder="${s.kind === 'bike' ? '例: 250' : '例: 658'}" value="${h(s.displacement ?? '')}"></div>
       <div class="field"><label>車検</label><select name="shaken">
         <option value="" ${!s.shaken ? 'selected' : ''}>自動（${s.kind === 'bike' && !(Number(s.displacement) > 250) ? 'なし：250cc以下のバイク' : 'あり'}）</option>
@@ -645,7 +655,7 @@ function openForm(type, rec = null, opts = {}) {
   const amountField = (label = '金額（円）') => `<div class="field"><label>${label}</label><div class="with-btn">
     <input name="amount" inputmode="decimal" placeholder="例: 13800+1290" value="${h(r.extra?.expr || (r.amount || r.amount === 0 && !isNew ? r.amount : ''))}">
     <button type="button" data-act="plus" aria-label="＋を入力">＋</button></div><div class="err" data-err="amount"></div></div>`;
-  const dateField = (label = '日付') => `<div class="field"><label>${label}</label><input name="date" type="date" value="${h(r.date)}"><div class="err" data-err="date"></div></div>`;
+  const dateField = (label = '日付') => `<div class="field"><label>${label}</label><input name="date" type="date" value="${h(r.date)}">${warekiHint(r.date)}<div class="err" data-err="date"></div></div>`;
   const odoField = () => `<div class="field"><label>走行距離 ODO (km)</label><input name="odo" inputmode="numeric" placeholder="${num(currentOdo())}" value="${h(r.odo ?? '')}"><div class="err" data-err="odo"></div></div>`;
   const noteField = () => `<div class="field"><label>備考</label><textarea name="note">${h(r.note)}</textarea></div>`;
   const titleField = (label, list) => `<div class="field"><label>${label}</label><input name="title" value="${h(r.title)}" ${list ? 'list="presets"' : ''}>
@@ -729,7 +739,7 @@ function openForm(type, rec = null, opts = {}) {
       const got = [];
       if (res.amount) { form.amount.value = res.amount; got.push(`金額 ${yen(res.amount)}`); }
       if (res.liters) { form.liters.value = res.liters; got.push(`給油量 ${res.liters}L`); }
-      if (res.date) { form.date.value = res.date; got.push(`日付 ${res.date}`); }
+      if (res.date) { form.date.value = res.date; form.date.dispatchEvent(new Event('input', { bubbles: true })); got.push(`日付 ${fmtDate(res.date)}`); }
       if (res.unit) got.push(`単価 ¥${res.unit}/L`);
       st.innerHTML = got.length
         ? `${icon('ti-check')} ${h(got.join(' · '))}<br><span class="${res.consistent ? '' : 'warn-text'}">${res.consistent ? '金額＝給油量×単価で検算OK。' : '数字を確認してください。'}ODO は手入力してください。</span>`
@@ -798,7 +808,7 @@ function openForm(type, rec = null, opts = {}) {
       const got = [];
       if (res.title && !form.title.value.trim()) form.title.value = res.title;
       if (res.items.length) got.push(`作業 ${res.items.map(i => i.name).join('・')}`);
-      if (res.date) { form.date.value = res.date; got.push(`日付 ${res.date}`); }
+      if (res.date) { form.date.value = res.date; form.date.dispatchEvent(new Event('input', { bubbles: true })); got.push(`日付 ${fmtDate(res.date)}`); }
       if (res.odo) { form.odo.value = res.odo; got.push(`走行 ${num(res.odo)}km`); }
       if (res.amount) { form.amount.value = res.amount; got.push(`合計 ${yen(res.amount)}`); }
       const detail = res.items.filter(i => i.amount).map(i => `${i.name} ${yen(i.amount)}`);

@@ -315,3 +315,6 @@ table.t th:first-child, table.t td:first-child { text-align: left; }
   .g-item.active .g-detail { padding-left: 92px; }
 }
 @media (min-width: 900px) and (max-width: 1180px) { .mini-cats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+
+.wareki-hint { margin-top: 3px; color: var(--text2); min-height: 1em; }
+.wareki-hint:empty { display: none; }
