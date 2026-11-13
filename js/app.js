@@ -56,8 +56,8 @@ function vehicleTabs() {
     ${icon(v.kind === 'bike' ? 'ti-motorbike' : 'ti-car')}<span>${h(v.vehicleName)}</span></button>`).join('')}
     <button class="vtab add" data-act="add-vehicle" aria-label="乗り物を追加">${icon('ti-plus')}</button></div>`;
 }
-function topbar(title) {
-  return `<div class="topbar"><h1>${h(title)}</h1>${syncPill()}</div>${vehicleTabs()}`;
+function topbar(title, tabs = true) {
+  return `<div class="topbar"><h1>${h(title)}</h1>${syncPill()}</div>${tabs ? vehicleTabs() : ''}`;
 }
 
 function subLine(r, fs) {
@@ -220,72 +220,167 @@ function reminderPanel() {
 }
 
 // ---------- ホーム（A） ----------
-function renderHome() {
-  const s = settings();
-  const t = totals();
-  const fs = fuelStats();
-  const cpk = costPerKm();
-  const rems = reminders().filter(r => r.status !== 'unknown');
-  const recent = sortRecords(active().filter(r => r.type !== 'plan')).slice(0, 6);
-  const hasData = active().length > 0;
-  const bar = COST_TYPES.filter(k => t.byType[k] > 0).map(k => `<span style="width:${(t.byType[k] / (t.upkeep || 1) * 100).toFixed(2)}%;background:${CATS[k].color}" title="${CATS[k].label}"></span>`).join('');
+// ---------- 愛車の写真 ----------
+const photoUrls = new Map();   // 写真 id → blob URL（再描画のたびに読み直さない）
+function photoBox(v, cls = '') {
+  const url = v.photo?.id ? photoUrls.get(v.photo.id) : null;
+  return `<div class="vphoto ${cls} ${url ? 'has' : ''}" data-photo-id="${h(v.photo?.id || '')}" style="${url ? `background-image:url('${url}')` : ''}">
+    ${url ? '' : icon(v.kind === 'bike' ? 'ti-motorbike' : 'ti-car')}</div>`;
+}
+// 画面に出た写真を IndexedDB（無ければドライブ）から読み込む
+function hydratePhotos(root = document) {
+  const metas = new Map(vehicles().filter(v => v.photo?.id).map(v => [v.photo.id, v.photo]));
+  root.querySelectorAll('.vphoto[data-photo-id]:not(.has)').forEach(async el => {
+    const meta = metas.get(el.dataset.photoId);
+    if (!meta) return;
+    try {
+      let url = photoUrls.get(meta.id);
+      if (!url) { url = URL.createObjectURL(await loadFile(meta)); photoUrls.set(meta.id, url); }
+      el.style.backgroundImage = `url('${url}')`; el.classList.add('has'); el.querySelector('.ti')?.remove();
+    } catch { /* 他の端末の写真で未同期など */ }
+  });
+}
+async function setVehiclePhoto(file) {
+  const vid = state.vid;   // 保存中に乗り物を切り替えても、選んだ時の乗り物に付ける
+  try {
+    toast('写真を保存中…', 1500);
+    const meta = await storeFile(file, 1200);
+    const old = settings(vid).photo;
+    updateSettings({ photo: meta }, vid);
+    if (old?.id) discardFiles([old]);
+    scheduleSync(); render(); toast('写真を登録しました');
+  } catch (err) { alert(err.message); }
+}
 
-  const remHtml = rems.length ? remSort(rems).slice(0, 5).map(remRow).join('') + (rems.length > 5 ? `<button class="link" data-cat="maint">${icon('ti-chevron-right')}すべての目安（${reminders().length}件）</button>` : '')
-    : '<div class="tiny">メンテ記録が入ると次回の目安を表示します</div>';
+// 期限を過ぎた・近いお知らせ（写真のバッジと長押しプレビュー用）
+function alertsOf(vid) {
+  const rems = reminders(vid).filter(r => r.status === 'over' || r.status === 'soon');
+  const k = shakenInfo(vid);
+  const shaken = k.required && k.expiry && k.status !== 'ok' ? k : null;
+  const over = rems.filter(r => r.status === 'over').length + (shaken?.status === 'over' ? 1 : 0);
+  return { rems: remSort(rems), shaken, count: rems.length + (shaken ? 1 : 0), over };
+}
+
+// ---------- ホーム ----------
+function renderHome() {
+  const vs = vehicles();
+  const fs = fuelStats();
+  const recent = sortRecords(active().filter(r => r.type !== 'plan')).slice(0, 6);
+  const hasData = active(null, '*').length > 0;
+  const all = vs.map(v => ({ v, t: totals(v.id) }));
+  const sum = all.reduce((a, x) => a + x.t.grand, 0);
+  const cur = vs.find(v => v.id === state.vid);
+
+  const detail = (v, t) => {
+    const cpk = costPerKm(v.id);
+    const f = fuelStats(v.id);
+    const bar = COST_TYPES.filter(k => t.byType[k] > 0).map(k => `<span style="width:${(t.byType[k] / (t.upkeep || 1) * 100).toFixed(2)}%;background:${CATS[k].color}" title="${CATS[k].label}"></span>`).join('');
+    return `<div class="g-detail">
+      <div class="h-row"><span class="muted">ローン ${yen(t.loan)} ＋ 維持費 ${yen(t.upkeep)}</span><span class="tiny">ODO ${num(currentOdo(v.id))}km</span></div>
+      <div class="stack-bar">${bar}</div>
+      <div class="mini-cats">
+        ${COST_TYPES.map(k => `<button class="mini-cat" data-cat="${k}"><span class="lbl"><i class="ti ${CATS[k].icon}" style="color:${CATS[k].color}" aria-hidden="true"></i>${CATS[k].short === '書類' ? '書類・保険' : CATS[k].label}</span><b>${yen(t.byType[k])}</b></button>`).join('')}
+        <button class="mini-cat" data-cat="plan"><span class="lbl"><i class="ti ${CATS.plan.icon}" style="color:${CATS.plan.color}" aria-hidden="true"></i>カスタム計画</span><b>${yen(t.plan)}</b></button>
+      </div>
+      <div class="kpis g-kpis">
+        <div><div class="v">${f.avgEconomy ? num(f.avgEconomy, 1) : '—'}</div><div class="tiny">平均燃費 km/L</div></div>
+        <div><div class="v">${cpk.fuel !== null ? '¥' + num(cpk.fuel, 1) : '—'}</div><div class="tiny">燃料費 /km</div></div>
+        <div><div class="v">${cpk.upkeep !== null ? '¥' + num(cpk.upkeep, 1) : '—'}</div><div class="tiny">維持費 /km</div></div>
+      </div>
+      <div class="tiny g-foot"><span>納車から ${num(Math.max(cpk.dist, 0))}km 走行</span>
+        ${v.photo?.id ? `<span>${icon('ti-hand-finger')}写真を長押しでメンテのお知らせ</span>` : `<label class="link">${icon('ti-photo-plus')}写真を登録<input type="file" accept="image/*" data-vphoto hidden></label>`}</div>
+    </div>`;
+  };
 
   $main.innerHTML = `
-    ${topbar('のりもの維持費')}
+    ${topbar('のりもの維持費', false)}
     ${shakenBanners()}
-    <div class="quick">
-      <button class="btn primary" data-act="receipt-camera">${icon('ti-camera')}レシートで給油登録</button>
-      <button class="btn" data-act="add-fuel">${icon('ti-gas-station')}給油を手入力</button>
-    </div>
     ${!hasData ? `<div class="card empty">${icon('ti-file-spreadsheet')}<p>まだ記録がありません</p>
       <div class="btn-row" style="justify-content:center"><button class="btn primary" data-act="import-xlsx">${icon('ti-upload')}Excelから取り込む</button>
       <button class="btn" data-act="add">${icon('ti-plus')}記録を追加</button></div></div>` : ''}
     <div class="grid-2"><div>
-      <div class="card">
-        <div class="h-row"><span class="muted">愛車に費やした総額</span><span class="tiny">ODO ${num(currentOdo())}km</span></div>
-        <div class="big">${yen(t.grand)}</div>
-        <div class="muted">ローン ${yen(t.loan)} ＋ 維持費 ${yen(t.upkeep)}</div>
-        <div class="stack-bar">${bar}</div>
-      </div>
-      <div class="cat-grid">
-        ${COST_TYPES.map(k => `<button class="cat-card" data-cat="${k}">
-          <div class="lbl" style="color:${CATS[k].color}">${icon(CATS[k].icon)}<span style="color:var(--text2)">${CATS[k].label}</span></div>
-          <div class="val">${yen(t.byType[k])}</div></button>`).join('')}
-        <button class="cat-card" data-cat="plan">
-          <div class="lbl" style="color:${CATS.plan.color}">${icon(CATS.plan.icon)}<span style="color:var(--text2)">カスタム計画（未購入）</span></div>
-          <div class="val">${yen(t.plan)}</div></button>
-      </div>
-      <div class="card" style="margin-top:14px">
-        <div class="kpis">
-          <div><div class="v">${fs.avgEconomy ? num(fs.avgEconomy, 1) : '—'}</div><div class="tiny">平均燃費 km/L</div></div>
-          <div><div class="v">${cpk.fuel !== null ? '¥' + num(cpk.fuel, 1) : '—'}</div><div class="tiny">燃料費 /km</div></div>
-          <div><div class="v">${cpk.upkeep !== null ? '¥' + num(cpk.upkeep, 1) : '—'}</div><div class="tiny">維持費 /km</div></div>
-        </div>
-        <div class="tiny" style="text-align:center;margin-top:6px">納車から ${num(Math.max(cpk.dist, 0))}km 走行</div>
+      <div class="garage card">
+        ${all.map(({ v, t }) => {
+          const al = alertsOf(v.id);
+          const on = v.id === state.vid;
+          return `<div class="g-item ${on ? 'active' : ''}">
+            <div class="g-row" role="button" tabindex="0" data-vid="${h(v.id)}" aria-expanded="${on}">
+              <div class="g-photo" data-peek="${h(v.id)}">${photoBox(v)}
+                ${al.count ? `<span class="g-badge ${al.over ? 'over' : 'soon'}" data-act="peek" data-peek-vid="${h(v.id)}" title="お知らせ ${al.count}件">${al.count}</span>` : ''}</div>
+              <div class="g-name"><b>${h(v.vehicleName)}</b><span class="tiny">${al.count ? `${al.over ? '期限超過あり' : '期限が近いものあり'}（${al.count}件）` : 'メンテ期限 OK'}</span></div>
+              <div class="g-total"><b>${yen(t.grand)}</b><span class="tiny">総額</span></div>
+              ${icon(on ? 'ti-chevron-up' : 'ti-chevron-down', 'class="g-chev"')}
+            </div>
+            ${on ? detail(v, t) : ''}
+          </div>`;
+        }).join('')}
+        <div class="g-sum"><button class="link" data-act="add-vehicle">${icon('ti-plus')}乗り物を追加</button>
+          ${vs.length > 1 ? `<span><span class="muted">全乗り物の合計</span> <b>${yen(sum)}</b></span>` : ''}</div>
       </div>
     </div><div>
-      ${allVehiclesCard()}
-      <div class="sec-title">次のメンテ目安</div>
-      <div class="card">${shakenRow()}${remHtml}</div>
-      <div class="sec-title h-row"><span>最近の記録</span><button class="btn" style="padding:3px 10px;font-size:12px" data-cat="all">すべて見る</button></div>
+      <div class="quick">
+        <button class="btn primary" data-act="receipt-camera">${icon('ti-camera')}レシートで給油登録</button>
+        <button class="btn" data-act="add-fuel">${icon('ti-gas-station')}給油を手入力</button>
+      </div>
+      <div class="sec-title h-row"><span>最近の記録（${h(cur?.vehicleName || '')}）</span><button class="btn" style="padding:3px 10px;font-size:12px" data-cat="all">すべて見る</button></div>
       ${recent.length ? recent.map(r => tlItem(r, fs)).join('') : '<div class="tiny" style="margin-left:4px">記録はまだありません</div>'}
     </div></div>`;
+  hydratePhotos($main);
 }
 
-function allVehiclesCard() {
-  const vs = vehicles();
-  if (vs.length < 2) return '';
-  const rows = vs.map(v => ({ v, t: totals(v.id) }));
-  const sum = rows.reduce((a, r) => a + r.t.grand, 0);
-  return `<div class="sec-title">全乗り物の合計</div><div class="card">
-    ${rows.map(({ v, t }) => `<button class="veh-row ${v.id === state.vid ? 'active' : ''}" data-vid="${h(v.id)}">
-      <span>${icon(v.kind === 'bike' ? 'ti-motorbike' : 'ti-car')} ${h(v.vehicleName)}</span>
-      <span><b>${yen(t.grand)}</b><span class="tiny"> 維持費 ${yen(t.upkeep)}</span></span></button>`).join('')}
-    <div class="h-row" style="margin-top:6px"><span class="muted">合計</span><b>${yen(sum)}</b></div></div>`;
+// ---------- 長押しプレビュー ----------
+function openPeek(vid) {
+  closePeek();
+  const v = vehicles().find(x => x.id === vid);
+  if (!v) return;
+  const al = alertsOf(vid);
+  const upcoming = remSort(reminders(vid).filter(r => r.status === 'ok')).slice(0, 3);
+  const el = document.createElement('div');
+  el.className = 'peek';
+  el.innerHTML = `<div class="peek-card" role="dialog" aria-label="${h(v.vehicleName)} のお知らせ">
+    <div class="peek-head">${photoBox(v, 'big')}<div><b>${h(v.vehicleName)}</b><div class="tiny">ODO ${num(currentOdo(vid))}km・${al.count ? `お知らせ ${al.count}件` : '期限を過ぎたものはありません'}</div></div></div>
+    <div class="peek-body">
+      ${al.shaken ? shakenRow(vid) : ''}
+      ${al.rems.map(remRow).join('')}
+      ${!al.count ? `<div class="tiny" style="margin:4px 0 6px">次に来るもの</div>${upcoming.map(remRow).join('') || '<div class="tiny">メンテ記録が入ると目安を表示します</div>'}` : ''}
+    </div>
+    <div class="btn-row" style="justify-content:flex-end;margin-top:8px">
+      <button class="btn sm" data-peek-act="all">${icon('ti-list')}すべての目安</button>
+      <button class="btn sm primary" data-peek-act="close">閉じる</button></div>
+  </div>`;
+  el.addEventListener('click', e => {
+    const t = e.target.closest('[data-peek-act],[data-act]');
+    if (e.target === el || t?.dataset.peekAct === 'close') return closePeek();
+    if (t?.dataset.peekAct === 'all') { closePeek(); setVehicle(vid); go('records', { cat: 'maint' }); return; }
+    if (t?.dataset.act === 'shaken-cal') return openShakenCalendar(t.dataset.cal);
+    if (t?.dataset.act === 'shaken-ics') return downloadShakenIcs(t.dataset.cal);
+  });
+  document.body.appendChild(el);
+  hydratePhotos(el);
+  if (navigator.vibrate) try { navigator.vibrate(15); } catch {}
 }
+function closePeek() { document.querySelectorAll('.peek').forEach(x => x.remove()); }
+document.addEventListener('keydown', e => { if (e.key === 'Escape') closePeek(); });
+
+// 写真の長押し（スマホ）・右クリック（PC）
+let pressTimer = null, pressStart = null, suppressClick = false;
+$main.addEventListener('pointerdown', e => {
+  const ph = e.target.closest('[data-peek]');
+  if (!ph) return;
+  pressStart = { x: e.clientX, y: e.clientY };
+  clearTimeout(pressTimer);
+  pressTimer = setTimeout(() => { suppressClick = true; openPeek(ph.dataset.peek); }, 450);
+});
+$main.addEventListener('pointermove', e => {
+  if (pressTimer && pressStart && Math.hypot(e.clientX - pressStart.x, e.clientY - pressStart.y) > 10) { clearTimeout(pressTimer); pressTimer = null; }
+});
+['pointerup', 'pointercancel', 'pointerleave'].forEach(t => $main.addEventListener(t, () => { clearTimeout(pressTimer); pressTimer = null; }));
+$main.addEventListener('contextmenu', e => {
+  const ph = e.target.closest('[data-peek]');
+  if (!ph) return;
+  e.preventDefault();
+  if (!suppressClick) openPeek(ph.dataset.peek);
+});
 
 // ---------- 記録（タブ＋タイムライン B） ----------
 function renderRecords() {
@@ -458,6 +553,12 @@ function renderSettings() {
     ${topbar('設定')}
     <div class="sec-title">乗り物の設定（${h(s.vehicleName)}）</div>
     <div class="card" data-form="vehicle">
+      <div class="photo-edit">${photoBox(vehicles().find(v => v.id === state.vid) || {}, 'big')}
+        <div class="btn-row">
+          <label class="btn">${icon('ti-photo')}写真を選ぶ<input type="file" accept="image/*" data-vphoto hidden></label>
+          <label class="btn">${icon('ti-camera')}撮影<input type="file" accept="image/*" capture="environment" data-vphoto hidden></label>
+          ${s.photo?.id ? `<button class="btn danger" data-act="del-vphoto">${icon('ti-trash')}削除</button>` : ''}
+        </div></div>
       <div class="two"><div class="field"><label>名前</label><input name="vehicleName" value="${h(s.vehicleName)}"></div>
       <div class="field"><label>種類</label><select name="kind"><option value="car" ${s.kind !== 'bike' ? 'selected' : ''}>車</option><option value="bike" ${s.kind === 'bike' ? 'selected' : ''}>バイク</option></select></div></div>
       <div class="two"><div class="field"><label>納車時の走行距離 (km)</label><input name="deliveryOdo" inputmode="numeric" value="${h(s.deliveryOdo)}"></div>
@@ -838,7 +939,9 @@ async function importXlsx(file) {
 }
 
 $main.addEventListener('click', async e => {
+  if (suppressClick) { suppressClick = false; e.preventDefault(); return; }
   if (e.target.closest('[data-stop]')) { e.stopPropagation(); return; }
+  if (e.target.closest('input[data-vphoto]')) return;
   const act = e.target.closest('[data-act]');
   if (act) {
     const a = act.dataset.act;
@@ -850,6 +953,12 @@ $main.addEventListener('click', async e => {
     }
     if (a === 'add') return openForm(ui.view === 'records' && ui.cat !== 'all' ? ui.cat : 'fuel');
     if (a === 'add-maint') return openForm('maint');
+    if (a === 'peek') { e.stopPropagation(); return openPeek(act.dataset.peekVid); }
+    if (a === 'del-vphoto') {
+      const old = settings().photo;
+      if (old?.id && confirm('この乗り物の写真を削除しますか？')) { updateSettings({ photo: null }); discardFiles([old]); scheduleSync(); render(); }
+      return;
+    }
     if (a === 'shaken-cal') return openShakenCalendar(act.dataset.cal);
     if (a === 'shaken-ics') return downloadShakenIcs(act.dataset.cal);
     if (a === 'notify-perm') {
@@ -875,6 +984,7 @@ $main.addEventListener('click', async e => {
       const s = settings();
       const n = active().length;
       if (!confirm(`「${s.vehicleName}」と、その記録 ${n}件を削除しますか？\n（他の端末からも消えます。元に戻せません）`)) return;
+      if (s.photo?.id) discardFiles([s.photo]);
       deleteVehicle(state.vid); changed(); toast('削除しました'); return;
     }
     if (a === 'export-xlsx') { try { await exportWorkbook(); } catch (err) { alert(err.message); } return; }
@@ -910,6 +1020,7 @@ $main.addEventListener('click', async e => {
 });
 
 $main.addEventListener('change', e => {
+  if (e.target.matches('[data-vphoto]')) { const f = e.target.files[0]; e.target.value = ''; if (f) setVehiclePhoto(f); return; }
   const vf = e.target.closest('[data-form="vehicle"]');
   if (vf) {
     const k = e.target.name;
@@ -1004,6 +1115,7 @@ function render() {
   document.querySelectorAll('#nav button[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === ui.view));
   $main.className = 'view-' + ui.view;
   ({ home: renderHome, records: renderRecords, stats: renderStats, settings: renderSettings, help: renderHelp }[ui.view] || renderHome)();
+  hydratePhotos($main);
 }
 
 onSyncChange(() => {

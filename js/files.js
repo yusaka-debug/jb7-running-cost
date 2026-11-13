@@ -32,14 +32,14 @@ export const delBlob = id => tx('readwrite', s => s.delete(id));
 export const isPdf = f => f.type === 'application/pdf' || /\.pdf$/i.test(f.name || '');
 export const isImage = f => (f.type || '').startsWith('image/') || /\.(jpe?g|png|webp|heic|heif)$/i.test(f.name || '');
 
-/** 選ばれたファイルを保存用に整えて IndexedDB に入れ、メタ情報を返す。写真は長辺2000pxのJPEGに縮小 */
-export async function storeFile(file) {
+/** 選ばれたファイルを保存用に整えて IndexedDB に入れ、メタ情報を返す。写真は長辺 maxSide px の JPEG に縮小 */
+export async function storeFile(file, maxSide = 2000) {
   let blob = file, mime = file.type, name = file.name || 'file';
   if (isPdf(file)) {
     if (file.size > MAX_PDF) throw new Error(`PDF が大きすぎます（${Math.round(file.size / 1048576)}MB）。15MB までにしてください`);
     mime = 'application/pdf';
   } else if (isImage(file)) {
-    const c = await fileToCanvas(file, 2000);
+    const c = await fileToCanvas(file, maxSide);
     blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.85));
     mime = 'image/jpeg';
     name = name.replace(/\.(heic|heif|png|webp)$/i, '.jpg');

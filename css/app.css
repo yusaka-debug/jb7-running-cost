@@ -245,3 +245,48 @@ table.t th:first-child, table.t td:first-child { text-align: left; }
 .shaken-alert { margin-bottom: 10px; }
 .help .legend span::before { display: none; }
 .shaken-alert { cursor: pointer; }
+
+/* ホーム：愛車リスト */
+.garage { padding: 6px 10px; }
+.g-item { border-bottom: 1px solid var(--line); }
+.g-item:last-of-type { border-bottom: 0; }
+.g-row { display: flex; align-items: center; gap: 12px; padding: 10px 4px; cursor: pointer; border-radius: 10px; }
+.g-row:hover { background: var(--card2); }
+.g-item.active .g-row { background: none; }
+.g-photo { position: relative; flex: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
+.vphoto { width: 64px; height: 64px; border-radius: 14px; background: var(--card2) center / cover no-repeat; display: grid; place-items: center; color: var(--text3); font-size: 30px; border: 1px solid var(--line); }
+.vphoto.big { width: 88px; height: 88px; font-size: 40px; }
+.g-item.active .vphoto { width: 76px; height: 76px; border-color: var(--accent); border-width: 2px; }
+.g-badge { position: absolute; top: -6px; right: -6px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; font-size: 12px; font-weight: 700; display: grid; place-items: center; color: #fff; background: var(--warn-text); border: 2px solid var(--card); cursor: pointer; }
+.g-badge.over { background: #D23B3B; }
+.g-name { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.g-name b { font-size: 16px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.g-total { text-align: right; display: flex; flex-direction: column; }
+.g-total b { font-size: 19px; letter-spacing: -.3px; }
+.g-item.active .g-total b { font-size: 22px; color: var(--accent-text); }
+@media (prefers-color-scheme: dark) { .g-item.active .g-total b { color: var(--accent); } }
+.g-chev { color: var(--text3); font-size: 18px; }
+.g-detail { padding: 0 4px 12px; }
+.g-detail .stack-bar { margin: 8px 0 10px; }
+.mini-cats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; }
+.mini-cat { border: 1px solid var(--line); background: var(--card); border-radius: 10px; padding: 7px 8px; text-align: left; display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.mini-cat .lbl { font-size: 11px; color: var(--text2); display: flex; gap: 4px; align-items: center; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.mini-cat .lbl i { font-size: 14px; }
+.mini-cat b { font-size: 15px; }
+.g-kpis { margin-top: 10px; padding: 10px 0 2px; border-top: 1px dashed var(--line); }
+.g-foot { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 4px 10px; margin-top: 8px; align-items: center; }
+.g-foot .link { cursor: pointer; }
+.g-sum { display: flex; justify-content: space-between; align-items: center; padding: 10px 4px 6px; gap: 8px; flex-wrap: wrap; }
+.g-sum b { font-size: 17px; }
+@media (max-width: 380px) { .vphoto { width: 54px; height: 54px; } .g-item.active .vphoto { width: 62px; height: 62px; } .g-total b { font-size: 17px; } .g-item.active .g-total b { font-size: 19px; } }
+
+/* 長押しプレビュー */
+.peek { position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,.35); backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); display: grid; place-items: center; padding: 16px; animation: peekIn .16s ease-out; }
+@keyframes peekIn { from { opacity: 0; } to { opacity: 1; } }
+.peek-card { width: min(440px, 100%); max-height: 86vh; overflow-y: auto; background: var(--card); border-radius: 18px; padding: 16px; box-shadow: 0 18px 50px rgba(0,0,0,.3); animation: peekPop .18s ease-out; }
+@keyframes peekPop { from { transform: scale(.94); } to { transform: scale(1); } }
+.peek-head { display: flex; gap: 12px; align-items: center; margin-bottom: 8px; }
+.peek-head b { font-size: 18px; }
+.peek-body .rem:first-child { border-top: 0; }
+.photo-edit { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.photo-edit label.btn { cursor: pointer; }

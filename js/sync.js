@@ -89,9 +89,10 @@ async function syncFiles() {
   }
   let updated = 0;
   for (const r of state.records) {
-    if (r.deleted || !Array.isArray(r.extra?.files)) continue;
+    if (r.deleted || !r.extra) continue;
+    const metas = [...(Array.isArray(r.extra.files) ? r.extra.files : []), ...(r.extra.photo?.id ? [r.extra.photo] : [])];   // 添付と乗り物の写真
     let dirty = false;
-    for (const f of r.extra.files) {
+    for (const f of metas) {
       if (f.driveId) continue;
       const blob = await getBlob(f.id).catch(() => null);
       if (!blob) continue;   // 他端末で付けたファイル（その端末がアップロードする）
