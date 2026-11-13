@@ -9,6 +9,7 @@ import { syncNow, scheduleSync, flushSync, onSyncChange, syncConfigured, loadFil
 import { storeFile, delBlob, discardFiles, fmtSize, isPdf, isImage, getBlob } from './files.js';
 import { readMaintDoc } from './docread.js';
 import { helpHtml } from './help.js';
+import { loanSchedule, loanStatus, manYen } from './loan.js';
 import { syncLink, parseSyncLink, qrSvg, readQrFromFile, scanWithCamera, cameraAvailable } from './syncqr.js';
 import { parseWorkbook, applyImport, exportWorkbook, exportJSON, importJSON } from './excel.js';
 
@@ -403,8 +404,9 @@ function renderHome() {
     const f = fuelStats(v.id);
     const bar = COST_TYPES.filter(k => t.byType[k] > 0).map(k => `<span style="width:${(t.byType[k] / (t.upkeep || 1) * 100).toFixed(2)}%;background:${CATS[k].color}" title="${CATS[k].label}"></span>`).join('');
     return `<div class="g-detail">
-      <div class="h-row"><span class="muted">ローン ${yen(t.loan)} ＋ 維持費 ${yen(t.upkeep)}</span><span class="tiny">ODO ${num(currentOdo(v.id))}km</span></div>
+      <div class="h-row"><span class="muted">車両の支払い ${yen(t.loan)} ＋ 維持費 ${yen(t.upkeep)}</span><span class="tiny">ODO ${num(currentOdo(v.id))}km</span></div>
       <div class="stack-bar">${bar}</div>
+      ${loanStrip(v)}
       <div class="g-body"><div class="mini-cats">
         ${COST_TYPES.map(k => `<button class="mini-cat" data-cat="${k}"><span class="lbl"><i class="ti ${CATS[k].icon}" style="color:${CATS[k].color}" aria-hidden="true"></i>${CATS[k].short === '書類' ? '書類・保険' : CATS[k].label}</span><b>${yen(t.byType[k])}</b></button>`).join('')}
         <button class="mini-cat" data-cat="plan"><span class="lbl"><i class="ti ${CATS.plan.icon}" style="color:${CATS.plan.color}" aria-hidden="true"></i>カスタム計画</span><b>${yen(t.plan)}</b></button>
@@ -414,7 +416,7 @@ function renderHome() {
         <div><div class="v">${cpk.fuel !== null ? '¥' + num(cpk.fuel, 1) : '—'}</div><div class="tiny">燃料費 /km</div></div>
         <div><div class="v">${cpk.upkeep !== null ? '¥' + num(cpk.upkeep, 1) : '—'}</div><div class="tiny">維持費 /km</div></div>
       </div></div>
-      <div class="tiny g-foot"><span>納車から ${num(Math.max(cpk.dist, 0))}km 走行</span>
+      <div class="tiny g-foot"><span>納車から ${num(Math.max(cpk.dist, 0))}km 走行${v.loan ? '' : ` · <button class="link" data-act="open-loan" data-loan-vid="${h(v.id)}">${icon('ti-building-bank')}ローンを登録</button>`}</span>
         ${v.photo?.id ? `<span>${icon('ti-hand-finger')}写真を長押しでメンテのお知らせ</span>` : `<label class="link">${icon('ti-photo-plus')}写真を登録<input type="file" accept="image/*" data-vphoto hidden></label>`}</div>
     </div>`;
   };
@@ -1153,6 +1155,15 @@ $main.addEventListener('click', async e => {
       try { importJSON(await f.text()); changed(); toast('復元しました'); } catch (err) { alert('復元できませんでした: ' + err.message); }
       return;
     }
+    if (a === 'open-loan') { if (act.dataset.loanVid) setVehicle(act.dataset.loanVid); return go('loan'); }
+    if (a === 'loan-back') return go('home');
+    if (a === 'loan-edit') return openLoanForm();
+    if (a === 'loan-file') { const f = (settings().loan?.files || []).find(x => x.id === act.dataset.id); if (f) openAttachment(f); return; }
+    if (a === 'loan-file-del') {
+      const loan = settings().loan; const f = (loan?.files || []).find(x => x.id === act.dataset.id);
+      if (f && confirm(`「${f.name}」を削除しますか？`)) { updateSettings({ loan: { ...loan, files: loan.files.filter(x => x !== f) } }); discardFiles([f]); changed(); }
+      return;
+    }
     if (a === 'sync-qr') return showSyncQr();
     if (a === 'sync-scan') return openSyncScanner();
     if (a === 'gen-token') {
@@ -1180,6 +1191,7 @@ $main.addEventListener('click', async e => {
 
 $main.addEventListener('change', e => {
   if (e.target.matches('[data-vphoto]')) { const f = e.target.files[0]; e.target.value = ''; if (f) setVehiclePhoto(f); return; }
+  if (e.target.matches('[data-loan-add]')) { const fs = [...e.target.files]; e.target.value = ''; addLoanFiles(fs); return; }
   if (e.target.matches('[data-sync-scan]')) { const f = e.target.files[0]; e.target.value = ''; if (f) scanSyncQr(f); return; }
   const vf = e.target.closest('[data-form="vehicle"]');
   if (vf) {
@@ -1205,6 +1217,144 @@ $main.addEventListener('change', e => {
   const sf = e.target.closest('[data-form="sync"]');
   if (sf) { applySyncForm(sf); setSyncMsg(null); }
 });
+
+// ---------- ローン ----------
+const fmtYMd = d => d ? fmtYM(d.slice(0, 7)) : '';
+const restText = st => `${st.years ? st.years + '年' : ''}${st.months ? st.months + 'か月' : (st.years ? '' : '0か月')}`;
+
+function loanStrip(v) {
+  if (!v.loan) return '';
+  const st = loanStatus(v.loan, today());
+  if (!st) return '';
+  return `<button class="loan-strip" data-act="open-loan" data-loan-vid="${h(v.id)}">
+    <span class="ls-main">${icon('ti-building-bank')}<span class="ls-label">ローン残高</span><b>${manYen(st.balance)}</b><span class="tiny">（${yen(st.balance)}）</span></span>
+    <span class="ls-sub">${st.restCount ? `あと <b>${restText(st)}</b>（${st.restCount}回）・完済 ${fmtYMd(st.finalDate)}` : '<b>完済しました</b>'}</span>
+    <span class="ls-bar"><span style="width:${(st.progress * 100).toFixed(1)}%"></span></span>
+    <span class="ls-more tiny">返済済み ${Math.round(st.progress * 100)}% · 詳細・書類 ${icon('ti-chevron-right')}</span>
+  </button>`;
+}
+
+function renderLoan() {
+  const s = settings();
+  const loan = s.loan;
+  if (!loan) {
+    $main.innerHTML = `${topbar('ローン')}
+      <div class="card empty">${icon('ti-building-bank')}<p>${h(s.vehicleName)} のローンは登録されていません</p>
+      <div class="btn-row" style="justify-content:center"><button class="btn primary" data-act="loan-edit">${icon('ti-plus')}ローンを登録</button>
+      <button class="btn" data-act="loan-back">${icon('ti-arrow-left')}ホームへ</button></div></div>`;
+    return;
+  }
+  const st = loanStatus(loan, today());
+  const rows = st ? st.rows : [];
+  const nextNo = st?.next?.no;
+  const rates = [...(loan.rates || [])].sort((a, b) => a.fromNo - b.fromNo);
+  const row = r => `<tr class="${r.no === nextNo ? 'next' : ''}${r.date <= today() ? ' done' : ''}"><td>${r.no}</td><td>${fmtDate(r.date)}</td><td>${yen(r.payment)}</td><td>${yen(r.principal)}</td><td>${yen(r.interest)}</td><td>${yen(r.balance)}${r.sure ? '' : '<span class="tiny"> 目安</span>'}</td><td>${num(r.rate, 2)}%</td></tr>`;
+  const head = '<tr><th>回</th><th>返済日</th><th>返済額</th><th>元金</th><th>利息</th><th>残高</th><th>年利</th></tr>';
+  const past = rows.filter(r => r.date <= today()), future = rows.filter(r => r.date > today());
+  const files = loan.files || [];
+  const dateOf = n => (rows.find(r => r.no === Number(n)) || {}).date || '';
+  $main.innerHTML = `
+    ${topbar('ローン')}
+    <div class="h-row" style="margin-bottom:8px"><button class="btn" data-act="loan-back">${icon('ti-arrow-left')}ホーム</button>
+      <button class="btn" data-act="loan-edit">${icon('ti-pencil')}ローン情報を編集</button></div>
+    ${st ? `<div class="card loan-sum">
+      <div class="loan-big"><span class="muted">${h(s.vehicleName)} のローン残高</span><b>${manYen(st.balance)}</b><span class="tiny">${yen(st.balance)}（${fmtDate(today())}時点）</span></div>
+      <div class="ls-bar big"><span style="width:${(st.progress * 100).toFixed(1)}%"></span></div>
+      <div class="tiny" style="display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap"><span>返済済み元金 ${yen(st.principalPaid)}（${Math.round(st.progress * 100)}%）</span><span>融資額 ${yen(loan.amount)}</span></div>
+      <div class="kpis loan-kpis">
+        <div><div class="v">${st.restCount ? restText(st) : '完済'}</div><div class="tiny">残り期間（${st.restCount}回）</div></div>
+        <div><div class="v">${st.finalDate.slice(0, 4)}年${Number(st.finalDate.slice(5, 7))}月</div><div class="tiny">完済予定（${wareki(st.finalDate.slice(0, 4), Number(st.finalDate.slice(5, 7)), 28)}）</div></div>
+        <div><div class="v">${st.next ? yen(st.next.payment) : '—'}</div><div class="tiny">次回の返済 ${st.next ? md(st.next.date) : ''}</div></div>
+        <div><div class="v">${num(st.rate, 3)}%</div><div class="tiny">次回の年利</div></div>
+        <div><div class="v">${manYen(st.restPayments)}</div><div class="tiny">残りの返済総額</div></div>
+        <div><div class="v">${yen(st.restInterest)}</div><div class="tiny">うち利息（今の金利のまま）</div></div>
+      </div>
+    </div>` : ''}
+    <div class="grid-2">
+      <div class="card"><div class="muted" style="margin-bottom:6px">ご契約内容</div><table class="t kv">
+        ${[['金融機関', loan.lender], ['商品名', loan.product], ['融資日', fmtDate(loan.startDate)], ['融資額', yen(loan.amount)], ['返済回数', loan.count ? `${loan.count}回` : ''],
+          ['返済日', loan.payDay ? `毎月${loan.payDay}日（休日は翌営業日）` : ''], ['第1回返済日', fmtDate(loan.firstPayDate)], ['最終期日', fmtDate(rows.length ? rows[rows.length - 1].date : '')],
+          ['金利', loan.rateType], ['メモ', loan.note]].filter(([, v]) => v).map(([k, v]) => `<tr><th>${k}</th><td>${h(v)}</td></tr>`).join('')}
+      </table></div>
+      <div class="card"><div class="muted" style="margin-bottom:6px">金利と返済額の推移</div><table class="t">
+        <tr><th>適用</th><th>年利</th><th>毎月の返済額</th></tr>
+        ${rates.map(r => `<tr><td>第${r.fromNo}回〜<span class="tiny">（${fmtDate(dateOf(r.fromNo))}）</span>${r.note ? `<div class="tiny">${h(r.note)}</div>` : ''}</td><td>${num(r.rate, 3)}%</td><td>${yen(r.payment)}</td></tr>`).join('')}
+      </table></div>
+    </div>
+    <div class="card"><div class="h-row" style="margin-bottom:6px"><span class="muted">書類（融資計算書・返済予定表など）</span>
+      <label class="btn">${icon('ti-file-plus')}追加<input type="file" accept="application/pdf,image/*" multiple data-loan-add hidden></label></div>
+      ${files.length ? `<div class="loan-files">${files.map(f => `<div class="loan-file"><button class="link" data-act="loan-file" data-id="${h(f.id)}">${icon(isPdf(f) ? 'ti-file-type-pdf' : 'ti-photo')}${h(f.name)}</button><span class="tiny">${fmtSize(f.size || 0)}</span>
+        <button class="icon-btn" data-act="loan-file-del" data-id="${h(f.id)}" aria-label="削除">${icon('ti-x')}</button></div>`).join('')}</div>` : '<div class="tiny">まだありません。PDF や写真を追加できます</div>'}
+    </div>
+    <div class="card"><div class="h-row" style="margin-bottom:6px;gap:8px;flex-wrap:wrap"><span class="muted">返済予定表（これから ${future.length}回）</span><span class="tiny">金利が今のまま続いた場合。「目安」は書類の数字から逆算した値</span></div>
+      <div class="scroll-x loan-scroll"><table class="t loan-table">${head}${future.map(row).join('')}</table></div>
+      ${past.length ? `<details class="month-list"><summary>返済済み（${past.length}回）</summary><div class="scroll-x"><table class="t loan-table">${head}${[...past].reverse().map(row).join('')}</table></div></details>` : ''}
+    </div>`;
+}
+
+async function addLoanFiles(list) {
+  const vid = state.vid;
+  const metas = [];
+  for (const f of list) {
+    try { metas.push(await storeFile(f)); } catch (err) { toast(err.message, 4000); }
+  }
+  if (!metas.length) return;
+  const loan = settings(vid).loan || {};
+  updateSettings({ loan: { ...loan, files: [...(loan.files || []), ...metas] } }, vid);
+  changed(); toast(`${metas.length}件追加しました`);
+}
+
+// ローン情報の編集（金利の見直しは「適用開始の回・年利・返済額」を1行ずつ）
+function openLoanForm() {
+  const s = settings();
+  const L = s.loan || { count: 96, payDay: 25, rates: [{ fromNo: 1, rate: '', payment: '' }], anchors: [] };
+  const rateRow = (r = {}) => `<div class="rate-row"><input name="r_from" inputmode="numeric" placeholder="第◯回から" value="${h(r.fromNo ?? '')}"><input name="r_rate" inputmode="decimal" placeholder="年利%" value="${h(r.rate ?? '')}"><input name="r_pay" inputmode="numeric" placeholder="毎月の返済額" value="${h(r.payment ?? '')}"><input name="r_note" placeholder="メモ" value="${h(r.note ?? '')}"><button type="button" class="icon-btn" data-del-row aria-label="削除">${icon('ti-x')}</button></div>`;
+  const ancRow = (r = {}) => `<div class="rate-row anc"><input name="a_no" inputmode="numeric" placeholder="第◯回" value="${h(r.no ?? '')}"><input name="a_bal" inputmode="numeric" placeholder="その回の返済後の残高" value="${h(r.balance ?? '')}"><input name="a_note" placeholder="メモ" value="${h(r.note ?? '')}"><button type="button" class="icon-btn" data-del-row aria-label="削除">${icon('ti-x')}</button></div>`;
+  const f = (name, label, v, attrs = '') => `<div class="field"><label>${label}</label><input name="${name}" value="${h(v ?? '')}" ${attrs}>${attrs.includes('type="date"') ? warekiHint(v) : ''}</div>`;
+  $sheet.innerHTML = `<div class="sheet" role="dialog" aria-modal="true"><h2>${h(s.vehicleName)} のローン</h2>
+    <form id="loan-form" novalidate>
+      <div class="two">${f('lender', '金融機関', L.lender)}${f('product', '商品名', L.product)}</div>
+      <div class="two">${f('amount', '融資額（円）', L.amount, 'inputmode="numeric"')}${f('count', '返済回数', L.count, 'inputmode="numeric"')}</div>
+      <div class="two">${f('startDate', '融資日', L.startDate, 'type="date"')}${f('firstPayDate', '第1回返済日', L.firstPayDate, 'type="date"')}</div>
+      <div class="two">${f('payDay', '毎月の返済日（日）', L.payDay, 'inputmode="numeric"')}${f('firstPayment', '第1回の返済額（円・分かれば）', L.firstPayment, 'inputmode="numeric"')}</div>
+      <div class="two">${f('rateType', '金利（例: 変動金利）', L.rateType)}${f('note', 'メモ', L.note)}</div>
+      <div class="sec-title">金利と毎月の返済額</div>
+      <div class="tiny">見直しのたびに「第何回から・年利・毎月の返済額」を1行追加します（返済予定表に書いてあります）</div>
+      <div data-rows="rate">${(L.rates || []).map(rateRow).join('')}</div>
+      <button type="button" class="btn" data-add-row="rate">${icon('ti-plus')}金利の見直しを追加</button>
+      <div class="sec-title">確かな残高（任意）</div>
+      <div class="tiny">返済予定表にある「第何回の返済後の残高」を入れると、計算がその値に合わせて補正されます</div>
+      <div data-rows="anc">${(L.anchors || []).map(ancRow).join('')}</div>
+      <button type="button" class="btn" data-add-row="anc">${icon('ti-plus')}残高を追加</button>
+      <div class="err" data-err="form"></div>
+      <div class="btn-row" style="margin-top:12px">${s.loan ? `<button type="button" class="btn danger" data-loan-del>${icon('ti-trash')}削除</button>` : ''}<span style="flex:1"></span>
+        <button type="button" class="btn" data-act="close">キャンセル</button><button type="submit" class="btn primary">${icon('ti-check')}保存</button></div>
+    </form></div>`;
+  $sheet.hidden = false;
+  const form = $sheet.querySelector('#loan-form');
+  $sheet.onclick = e => {
+    if (e.target === $sheet || e.target.closest('[data-act=close]')) return closeForm();
+    const add = e.target.closest('[data-add-row]');
+    if (add) { form.querySelector(`[data-rows="${add.dataset.addRow}"]`).insertAdjacentHTML('beforeend', add.dataset.addRow === 'rate' ? rateRow() : ancRow()); return; }
+    const del = e.target.closest('[data-del-row]');
+    if (del) { del.closest('.rate-row').remove(); return; }
+    if (e.target.closest('[data-loan-del]') && confirm('ローン情報を削除しますか？（書類も削除されます）')) {
+      discardFiles(s.loan.files || []); updateSettings({ loan: null }); closeForm(); changed(); toast('削除しました');
+    }
+  };
+  const numv = v => { const n = Number(String(v ?? '').replace(/[,\s円%]/g, '')); return Number.isFinite(n) ? n : 0; };
+  form.onsubmit = e => {
+    e.preventDefault();
+    const g = n => form.elements[n].value.trim();
+    const rates = [...form.querySelectorAll('[data-rows=rate] .rate-row')].map(r => ({ fromNo: numv(r.querySelector('[name=r_from]').value), rate: numv(r.querySelector('[name=r_rate]').value), payment: numv(r.querySelector('[name=r_pay]').value), note: r.querySelector('[name=r_note]').value.trim() })).filter(r => r.fromNo && r.rate && r.payment);
+    const anchors = [...form.querySelectorAll('[data-rows=anc] .rate-row')].map(r => ({ no: numv(r.querySelector('[name=a_no]').value), balance: numv(r.querySelector('[name=a_bal]').value), note: r.querySelector('[name=a_note]').value.trim() })).filter(r => r.no && r.balance);
+    const loan = { ...(s.loan || {}), lender: g('lender'), product: g('product'), amount: numv(g('amount')), count: numv(g('count')), startDate: g('startDate'), firstPayDate: g('firstPayDate'),
+      payDay: numv(g('payDay')) || numv(g('firstPayDate').slice(8, 10)), firstPayment: numv(g('firstPayment')) || null, rateType: g('rateType'), note: g('note'), rates, anchors };
+    const err = !loan.amount ? '融資額を入れてください' : !loan.count ? '返済回数を入れてください' : !loan.firstPayDate ? '第1回返済日を入れてください' : !rates.length ? '金利と返済額を1行以上入れてください' : '';
+    if (err) { form.querySelector('[data-err=form]').textContent = err; return; }
+    updateSettings({ loan }); closeForm(); go('loan'); scheduleSync(); toast('保存しました');
+  };
+}
 
 // ---------- 乗り物の追加 ----------
 function openVehicleForm() {
@@ -1267,7 +1417,7 @@ async function handleFile(file) {
 function render() {
   document.querySelectorAll('#nav button[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === ui.view));
   $main.className = 'view-' + ui.view;
-  ({ home: renderHome, records: renderRecords, stats: renderStats, settings: renderSettings, help: renderHelp }[ui.view] || renderHome)();
+  ({ home: renderHome, records: renderRecords, stats: renderStats, settings: renderSettings, help: renderHelp, loan: renderLoan }[ui.view] || renderHome)();
   hydratePhotos($main);
 }
 

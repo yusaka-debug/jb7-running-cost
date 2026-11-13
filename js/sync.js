@@ -110,7 +110,7 @@ async function syncFiles() {
   let updated = 0;
   for (const r of state.records) {
     if (r.deleted || !r.extra) continue;
-    const metas = [...(Array.isArray(r.extra.files) ? r.extra.files : []), ...(r.extra.photo?.id ? [r.extra.photo] : [])];   // 添付と乗り物の写真
+    const metas = [...(Array.isArray(r.extra.files) ? r.extra.files : []), ...(r.extra.photo?.id ? [r.extra.photo] : []), ...(Array.isArray(r.extra.loan?.files) ? r.extra.loan.files : [])];   // 添付・乗り物の写真・ローンの書類
     let dirty = false;
     for (const f of metas) {
       if (f.driveId) continue;

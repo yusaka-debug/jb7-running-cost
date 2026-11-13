@@ -343,3 +343,37 @@ table.t th:first-child, table.t td:first-child { text-align: left; }
 .scan-note { position: absolute; left: 8px; right: 8px; bottom: 8px; color: #fff; text-align: center; text-shadow: 0 1px 2px #000; }
 .scan-note:empty { display: none; }
 .scan-photo { cursor: pointer; justify-content: center; }
+
+/* ローン */
+.loan-strip { display: grid; grid-template-columns: 1fr auto; gap: 4px 12px; align-items: center; width: 100%; text-align: left; margin: 0 0 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 12px; background: var(--card2); color: var(--text); cursor: pointer; font: inherit; }
+.loan-strip:hover { border-color: var(--accent); }
+.ls-main { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+.ls-main .ti { font-size: 18px; color: var(--accent-text); align-self: center; }
+.ls-label { font-size: 13px; color: var(--text2); }
+.ls-main b { font-size: 22px; letter-spacing: -.3px; }
+.ls-sub { font-size: 13px; color: var(--text2); text-align: right; }
+.ls-sub b { color: var(--text); font-size: 15px; }
+.ls-bar { grid-column: 1 / -1; display: block; height: 8px; border-radius: 4px; background: var(--line); overflow: hidden; }
+.ls-bar > span { display: block; height: 100%; background: var(--accent); border-radius: 4px; }
+.ls-bar.big { height: 12px; margin: 10px 0 6px; }
+.ls-more { grid-column: 1 / -1; display: flex; justify-content: flex-end; align-items: center; gap: 2px; color: var(--accent-text); }
+@media (max-width: 560px) { .loan-strip { grid-template-columns: 1fr; } .ls-sub { text-align: left; } }
+.loan-big { display: flex; flex-direction: column; gap: 2px; }
+.loan-big b { font-size: 34px; letter-spacing: -.5px; }
+.loan-kpis { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px 8px; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--line); }
+@media (min-width: 900px) { .loan-kpis { grid-template-columns: repeat(6, minmax(0, 1fr)); } }
+.t.kv th { text-align: left; white-space: nowrap; color: var(--text2); font-weight: 400; width: 30%; }
+.loan-table td, .loan-table th { white-space: nowrap; }
+.loan-table tr.done td { color: var(--text3); }
+.loan-table tr.next td { background: var(--ok-bg); color: var(--ok-text); font-weight: 600; }
+.loan-files { display: flex; flex-direction: column; gap: 6px; }
+.loan-file { display: flex; align-items: center; gap: 8px; }
+.loan-file .link { display: inline-flex; gap: 6px; align-items: center; text-align: left; flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.rate-row { display: grid; grid-template-columns: 70px 70px 1fr 1fr 32px; gap: 6px; margin: 6px 0; }
+.rate-row.anc { grid-template-columns: 70px 1fr 1fr 32px; }
+.rate-row input { min-width: 0; }
+.icon-btn { border: 0; background: none; color: var(--text3); width: 32px; height: 32px; border-radius: 8px; display: grid; place-items: center; cursor: pointer; font-size: 16px; }
+.icon-btn:hover { background: var(--card2); color: var(--danger-text); }
+.t.kv td { text-align: left; }
+.loan-scroll { max-height: 420px; overflow-y: auto; }
+.loan-scroll th { position: sticky; top: 0; background: var(--card); }
