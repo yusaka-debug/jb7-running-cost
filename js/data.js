@@ -1,5 +1,5 @@
 // データ保存・モデル・計算ロジック
-export const APP_VERSION = '0.3.0';
+export const APP_VERSION = '0.4.0';
 
 export const CATS = {
   fuel:    { label: 'ガソリン',     short: '給油',     icon: 'ti-gas-station',  color: '#BA7517' },
@@ -31,20 +31,31 @@ export const BIKE_MAINT_PRESETS = [
   'クーラント交換', 'エアクリーナー交換', 'スパークプラグ交換', 'バッテリー交換', '12か月点検', '車検', '洗車',
 ];
 
+// 交換・点検の目安（keyword は記録の「実施項目」に含まれる言葉。| で区切ると複数）
 const REMINDERS = {
   car: [
     { name: 'エンジンオイル', keyword: 'オイル', km: 5000, months: 6 },
+    { name: 'オイルフィルター', keyword: 'オイル・フィルター|オイルフィルター|オイルエレメント', km: 10000, months: 12 },
+    { name: 'ブレーキフルード', keyword: 'ブレーキフルード|ブレーキオイル', km: 0, months: 24 },
+    { name: 'ミッションオイル', keyword: 'ATF|CVT|MTオイル|ミッションオイル', km: 40000, months: 0 },
+    { name: 'エアクリーナー', keyword: 'エアクリ|エアエレメント', km: 30000, months: 0 },
+    { name: 'タイヤローテーション', keyword: 'ローテーション', km: 5000, months: 0 },
     { name: 'エアコンフィルター', keyword: 'エアコンフィルター', km: 0, months: 12 },
     { name: 'ワイパーゴム', keyword: 'ワイパー', km: 0, months: 12 },
     { name: 'バッテリー', keyword: 'バッテリー', km: 0, months: 36 },
+    { name: '12か月点検', keyword: '12か月点検|12ヶ月点検|法定点検|車検', km: 0, months: 12 },
+    { name: '車検', keyword: '車検', km: 0, months: 24 },
   ],
   bike: [
     { name: 'エンジンオイル', keyword: 'オイル', km: 3000, months: 6 },
+    { name: 'オイルフィルター', keyword: 'オイル・フィルター|オイルフィルター|オイルエレメント', km: 6000, months: 12 },
     { name: 'チェーン注油', keyword: 'チェーン', km: 1000, months: 0 },
     { name: 'ブレーキフルード', keyword: 'ブレーキフルード', km: 0, months: 24 },
     { name: 'バッテリー', keyword: 'バッテリー', km: 0, months: 24 },
+    { name: '12か月点検', keyword: '12か月点検|12ヶ月点検|法定点検', km: 0, months: 12 },
   ],
 };
+const REMINDERS_V = 2;   // 標準の目安を増やしたら上げる（既存の乗り物に足りない分だけ追加される）
 
 // 乗り物ごとの設定。id は設定レコードの id（JB7 は過去データ互換のため 'settings'）
 export const DEFAULT_VEHICLE = {
@@ -53,9 +64,9 @@ export const DEFAULT_VEHICLE = {
   reminders: REMINDERS.car, maintPresets: CAR_MAINT_PRESETS,
 };
 const BUILTIN_VEHICLES = {
-  'settings':      { vehicleName: 'JB7 ライフ', kind: 'car', order: 0, deliveryOdo: 60000, reminders: [{ name: 'エンジンオイル', keyword: 'オイル', km: 3000, months: 6 }, ...REMINDERS.car.slice(1)], maintPresets: JB7_MAINT_PRESETS },
-  'settings-fl5':  { vehicleName: 'FL5', kind: 'car', order: 1, reminders: REMINDERS.car, maintPresets: CAR_MAINT_PRESETS },
-  'settings-mc51': { vehicleName: 'MC51', kind: 'bike', order: 2, reminders: REMINDERS.bike, maintPresets: BIKE_MAINT_PRESETS },
+  'settings':      { vehicleName: 'JB7 ライフ', kind: 'car', order: 0, deliveryOdo: 60000, reminders: [{ name: 'エンジンオイル', keyword: 'オイル', km: 3000, months: 6 }, ...REMINDERS.car.slice(1)], maintPresets: JB7_MAINT_PRESETS, remindersV: REMINDERS_V },
+  'settings-fl5':  { vehicleName: 'FL5', kind: 'car', order: 1, reminders: REMINDERS.car, maintPresets: CAR_MAINT_PRESETS, remindersV: REMINDERS_V },
+  'settings-mc51': { vehicleName: 'MC51', kind: 'bike', order: 2, reminders: REMINDERS.bike, maintPresets: BIKE_MAINT_PRESETS, remindersV: REMINDERS_V },
 };
 export const presetsForKind = kind => kind === 'bike' ? BIKE_MAINT_PRESETS : CAR_MAINT_PRESETS;
 export const remindersForKind = kind => REMINDERS[kind] || REMINDERS.car;
@@ -85,6 +96,7 @@ export function load() {
     if (s) Object.assign(state.sync, JSON.parse(s));
   } catch (e) { console.error(e); }
   ensureBuiltins();
+  migrateVehicles();
   try { state.vid = localStorage.getItem(VID_KEY) || 'settings'; } catch {}
   fixCurrentVid();
 }
@@ -96,6 +108,25 @@ export function ensureBuiltins() {
       state.records.push({ id, type: 'settings', extra: { ...DEFAULT_VEHICLE, ...v }, updatedAt: 0, deleted: false });
     }
   }
+}
+
+/** 標準の交換目安が増えたとき、既存の乗り物に無い項目だけ追加する（名前が同じものは触らない） */
+export function migrateVehicles() {
+  let dirty = false;
+  for (const r of state.records) {
+    if (r.type !== 'settings' || r.deleted) continue;
+    const ex = r.extra || (r.extra = {});
+    if ((ex.remindersV || 1) >= REMINDERS_V) continue;
+    if (Array.isArray(ex.reminders)) {   // 無い場合は標準（最新）がそのまま使われる
+      const have = new Set(ex.reminders.map(x => x.name));
+      ex.reminders = [...ex.reminders, ...remindersForKind(ex.kind || 'car').filter(x => !have.has(x.name))];
+    }
+    ex.remindersV = REMINDERS_V;
+    if (r.updatedAt) r.updatedAt = Date.now();   // 0 の標準データは同期で他端末の内容が勝つようにそのまま
+    dirty = true;
+  }
+  if (dirty) save();
+  return dirty;
 }
 
 export function save() {
@@ -123,7 +154,7 @@ export function setVehicle(vid) {
 export function addVehicle(name, kind) {
   const order = Math.max(0, ...vehicles().map(v => v.order ?? 0)) + 1;
   const id = 'settings-' + uid();
-  state.records.push({ id, type: 'settings', extra: { ...DEFAULT_VEHICLE, vehicleName: name, kind, order, reminders: remindersForKind(kind), maintPresets: presetsForKind(kind) }, updatedAt: Date.now(), deleted: false });
+  state.records.push({ id, type: 'settings', extra: { ...DEFAULT_VEHICLE, vehicleName: name, kind, order, reminders: remindersForKind(kind), maintPresets: presetsForKind(kind), remindersV: REMINDERS_V }, updatedAt: Date.now(), deleted: false });
   save();
   return id;
 }
@@ -270,8 +301,14 @@ export function reminders(vid = state.vid) {
     const last = hits[0];
     const res = { rule, last, remainKm: null, remainDays: null, dueOdo: null, dueDate: null, status: 'unknown' };
     if (!last) return res;
-    if (rule.km && last.odo) { res.dueOdo = last.odo + Number(rule.km); res.remainKm = res.dueOdo - odo; }
-    if (rule.months && last.date) { res.dueDate = addMonths(last.date, Number(rule.months)); res.remainDays = daysBetween(now, res.dueDate); }
+    const fr = [];
+    if (rule.km && last.odo) { res.dueOdo = last.odo + Number(rule.km); res.remainKm = res.dueOdo - odo; fr.push((odo - last.odo) / Number(rule.km)); }
+    if (rule.months && last.date) {
+      res.dueDate = addMonths(last.date, Number(rule.months)); res.remainDays = daysBetween(now, res.dueDate);
+      const span = daysBetween(last.date, res.dueDate);
+      if (span > 0) fr.push(daysBetween(last.date, now) / span);
+    }
+    res.progress = fr.length ? Math.max(0, Math.max(...fr)) : null;   // 1 で交換時期
     const over = (res.remainKm !== null && res.remainKm < 0) || (res.remainDays !== null && res.remainDays < 0);
     const soon = (res.remainKm !== null && res.remainKm <= 500) || (res.remainDays !== null && res.remainDays <= 30);
     res.status = over ? 'over' : soon ? 'soon' : 'ok';

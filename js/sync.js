@@ -1,6 +1,6 @@
 // Google スプレッドシート（Apps Script Web アプリ）との同期
 // 方式: 前回同期以降に変更したレコードを送信 → サーバーが updatedAt の新しい方を採用して保存 → 全件を返す → 端末側も新しい方を採用
-import { state, save, saveSync } from './data.js';
+import { state, save, saveSync, migrateVehicles } from './data.js';
 import { getBlob, putBlob, blobToBase64, base64ToBlob, pendingDriveDeletes, clearDriveDelete } from './files.js';
 
 let running = null;
@@ -46,6 +46,7 @@ export async function syncNow() {
         if (i < 0) { state.records.push(rec); changed++; }
         else if ((rec.updatedAt || 0) > (state.records[i].updatedAt || 0)) { state.records[i] = rec; changed++; }
       }
+      const migrated = migrateVehicles();
       save();
       state.sync.lastPush = startedAt;
       state.sync.lastSyncAt = Date.now();
@@ -53,7 +54,7 @@ export async function syncNow() {
       saveSync(); emit();
       // 添付ファイルを Drive へ（失敗しても記録の同期は成功扱い）
       const up = await syncFiles().catch(e => { console.warn('files', e); return 0; });
-      if (up) scheduleSync(300);
+      if (up || migrated) scheduleSync(300);
       return { pushed: changes.length, pulled: changed };
     } catch (e) {
       state.sync.status = 'error';

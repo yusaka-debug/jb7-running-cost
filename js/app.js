@@ -7,6 +7,7 @@ import { readReceipt } from './receipt.js';
 import { syncNow, scheduleSync, onSyncChange, syncConfigured, loadFile } from './sync.js';
 import { storeFile, delBlob, discardFiles, fmtSize, isPdf, isImage, getBlob } from './files.js';
 import { readMaintDoc } from './docread.js';
+import { helpHtml } from './help.js';
 import { parseWorkbook, applyImport, exportWorkbook, exportJSON, importJSON } from './excel.js';
 
 const $main = document.getElementById('main');
@@ -97,6 +98,46 @@ function sortRecords(list) {
   return list.sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.odo || 0) - (a.odo || 0) || (b.updatedAt || 0) - (a.updatedAt || 0));
 }
 
+// ---------- 交換・点検の目安 ----------
+const fmtDate = d => d ? `${d.slice(0, 4)}/${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}` : '';
+function remLeft(r) {
+  const bits = [];
+  if (r.remainKm !== null) bits.push(r.remainKm >= 0 ? `あと${num(r.remainKm)}km` : `${num(-r.remainKm)}km超過`);
+  if (r.remainDays !== null) bits.push(r.remainDays >= 0 ? `あと${num(r.remainDays)}日` : `${num(-r.remainDays)}日超過`);
+  return bits.join('・');
+}
+function remSort(list) {
+  const rank = { over: 0, soon: 1, ok: 2, unknown: 3 };
+  return [...list].sort((a, b) => rank[a.status] - rank[b.status] || (b.progress ?? 0) - (a.progress ?? 0));
+}
+function remRow(r) {
+  const ic = { over: 'ti-alert-triangle', soon: 'ti-bell', ok: 'ti-circle-check', unknown: 'ti-help-circle' }[r.status];
+  if (r.status === 'unknown') {
+    const rule = [r.rule.km ? `${num(r.rule.km)}km` : '', r.rule.months ? `${r.rule.months}か月` : ''].filter(Boolean).join('・');
+    return `<div class="rem unknown">${icon(ic)}<div class="rem-b"><div class="rem-top"><span class="rem-name">${h(r.rule.name)}</span>
+      <button class="link" data-act="rem-record" data-name="${h(r.rule.name)}">${icon('ti-plus')}記録</button></div>
+      <div class="tiny">記録なし（目安 ${rule || '未設定'}ごと）</div></div></div>`;
+  }
+  const pct = Math.min(100, Math.round((r.progress ?? 0) * 100));
+  const next = [r.dueOdo ? `${num(r.dueOdo)}km` : '', r.dueDate ? fmtDate(r.dueDate) : ''].filter(Boolean).join(' / ');
+  return `<div class="rem ${r.status}">${icon(ic)}<div class="rem-b">
+    <div class="rem-top"><span class="rem-name">${h(r.rule.name)}</span><span class="rem-left">${remLeft(r)}</span></div>
+    <div class="rem-bar"><span style="width:${pct}%"></span></div>
+    <div class="tiny">前回 ${fmtDate(r.last.date) || '日付なし'}${r.last.odo ? '・' + num(r.last.odo) + 'km' : ''}${next ? ' → 次回 ' + next : ''}</div></div></div>`;
+}
+function reminderPanel() {
+  const rems = remSort(reminders());
+  return `<div class="card rem-panel">
+    <div class="h-row" style="margin-bottom:8px"><b>${icon('ti-tool')} 交換・点検の目安</b><span class="tiny">今 ${num(currentOdo())}km</span></div>
+    ${rems.length ? rems.map(remRow).join('') : '<div class="tiny">目安が設定されていません</div>'}
+    <div class="btn-row" style="margin-top:10px">
+      <button class="btn primary sm" data-act="add-maint">${icon('ti-plus')}メンテを記録</button>
+      <button class="btn sm" data-act="to-settings">${icon('ti-adjustments')}目安を編集</button>
+    </div>
+    <div class="tiny" style="margin-top:6px">距離と期間のうち、先に来る方で判定。メンテ記録の「実施項目」の言葉で前回を探します。</div>
+  </div>`;
+}
+
 // ---------- ホーム（A） ----------
 function renderHome() {
   const s = settings();
@@ -108,13 +149,8 @@ function renderHome() {
   const hasData = active().length > 0;
   const bar = COST_TYPES.filter(k => t.byType[k] > 0).map(k => `<span style="width:${(t.byType[k] / (t.upkeep || 1) * 100).toFixed(2)}%;background:${CATS[k].color}" title="${CATS[k].label}"></span>`).join('');
 
-  const remHtml = rems.length ? rems.map(r => {
-    const bits = [];
-    if (r.remainKm !== null) bits.push(r.remainKm >= 0 ? `あと${num(r.remainKm)}km` : `${num(-r.remainKm)}km超過`);
-    if (r.remainDays !== null) bits.push(r.remainDays >= 0 ? `あと${r.remainDays}日` : `${-r.remainDays}日超過`);
-    const ic = r.status === 'over' ? 'ti-alert-triangle' : r.status === 'soon' ? 'ti-bell' : 'ti-circle-check';
-    return `<div class="alert ${r.status}">${icon(ic)}<span>${h(r.rule.name)}：${bits.join(' / ')}</span></div>`;
-  }).join('') : '<div class="tiny">メンテ記録が入ると次回の目安を表示します</div>';
+  const remHtml = rems.length ? remSort(rems).slice(0, 5).map(remRow).join('') + (rems.length > 5 ? `<button class="link" data-cat="maint">${icon('ti-chevron-right')}すべての目安（${reminders().length}件）</button>` : '')
+    : '<div class="tiny">メンテ記録が入ると次回の目安を表示します</div>';
 
   $main.innerHTML = `
     ${topbar('のりもの維持費')}
@@ -196,13 +232,22 @@ function renderRecords() {
   $main.innerHTML = `
     ${topbar('記録')}
     <div class="tabs" role="tablist">${tabs.map(([k, l, ic]) => `<button class="tab ${ui.cat === k ? 'active' : ''}" data-tab="${k}" role="tab">${icon(ic)}${l}</button>`).join('')}</div>
-    <div class="tab-summary"><span class="muted">${list.length}件</span><span style="font-weight:700;font-size:18px">${yen(total)}</span></div>
+    <div class="rec-layout"><div class="rec-main">
+    <div class="tab-summary"><span class="muted">${list.length}件</span>
+      <span class="h-row" style="gap:12px"><span style="font-weight:700;font-size:18px">${yen(total)}</span>
+      <button class="btn primary sm" data-act="add">${icon('ti-plus')}${ui.cat === 'all' ? '記録' : CATS[ui.cat].short}を追加</button></span></div>
     ${extra}
     ${groups.length ? groups.map(g => `<div class="month"><span>${label(g.key)}</span><span>${yen(g.sum)}</span></div>${g.items.map(r => tlItem(r, fs)).join('')}`).join('')
       : `<div class="empty">${icon(ui.cat === 'all' ? 'ti-list' : CATS[ui.cat].icon)}<p>${ui.cat === 'all' ? '記録' : CATS[ui.cat].label}はまだありません</p><button class="btn primary" data-act="add">${icon('ti-plus')}追加する</button></div>`}
+    </div><aside class="rec-aside ${ui.cat === 'maint' ? 'narrow-show' : ''}">${reminderPanel()}</aside></div>
   `;
   const at = $main.querySelector('.tab.active');
   if (at) at.scrollIntoView({ inline: 'center', block: 'nearest' });
+}
+
+// ---------- ヘルプ ----------
+function renderHelp() {
+  $main.innerHTML = `<div class="topbar"><h1>ヘルプ</h1>${syncPill()}</div>${helpHtml()}<div class="tiny" style="text-align:center;margin:8px 0 20px">のりもの維持費 v${APP_VERSION}</div>`;
 }
 
 // ---------- 集計 ----------
@@ -685,6 +730,9 @@ $main.addEventListener('click', async e => {
       return;
     }
     if (a === 'add') return openForm(ui.view === 'records' && ui.cat !== 'all' ? ui.cat : 'fuel');
+    if (a === 'add-maint') return openForm('maint');
+    if (a === 'rem-record') return openForm('maint', null, { prefill: { title: act.dataset.name } });
+    if (a === 'help-to') { const el = $main.querySelector('#' + act.dataset.to); if (el) el.scrollIntoView({ behavior: 'smooth' }); return; }
     if (a === 'to-settings') return go('settings');
     if (a === 'sync') {
       if (!syncConfigured()) return go('settings');
@@ -824,7 +872,8 @@ async function handleFile(file) {
 
 function render() {
   document.querySelectorAll('#nav button[data-view]').forEach(b => b.classList.toggle('active', b.dataset.view === ui.view));
-  ({ home: renderHome, records: renderRecords, stats: renderStats, settings: renderSettings }[ui.view] || renderHome)();
+  $main.className = 'view-' + ui.view;
+  ({ home: renderHome, records: renderRecords, stats: renderStats, settings: renderSettings, help: renderHelp }[ui.view] || renderHome)();
 }
 
 onSyncChange(() => {
