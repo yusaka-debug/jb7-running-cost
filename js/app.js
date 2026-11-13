@@ -85,7 +85,7 @@ function tlItem(r, fs) {
   if (r.type === 'plan') {
     const meta = [r.extra?.genre, r.extra?.maker].filter(Boolean).join(' · ');
     plan = `${meta ? `<div class="s">${h(meta)}</div>` : ''}${r.extra?.link ? `<div class="s"><a href="${h(r.extra.link)}" target="_blank" rel="noopener" data-stop>${icon('ti-external-link')} リンクを開く</a></div>` : ''}
-      <div class="btn-row" style="margin-top:6px"><span class="btn" data-act="bought" data-id="${h(r.id)}">${icon('ti-check')}購入済みにする</span></div>`;
+      <div class="btn-row" style="margin-top:6px"><span class="btn" data-act="bought" data-id="${h(r.id)}">${icon('ti-check')}購入済みにする</span><span class="btn danger" data-act="del-plan" data-id="${h(r.id)}">${icon('ti-trash')}削除</span></div>`;
   }
   return `<div class="tl-item" role="button" tabindex="0" style="--c:${c.color}" data-edit="${h(r.id)}">
     <div class="t"><span>${icon(c.icon)}<span>${h(title)}</span>${badges.map(b => `<span class="badge">${b}</span>`).join('')}</span><span>${yen(r.amount)}</span></div>
@@ -949,6 +949,12 @@ $main.addEventListener('click', async e => {
       e.stopPropagation();
       const p = state.records.find(x => x.id === act.dataset.id);
       openForm('custom', null, { lockType: true, fromPlan: p.id, prefill: { title: p.title, amount: p.amount, note: [p.extra?.maker, p.note].filter(Boolean).join(' / ') } });
+      return;
+    }
+    if (a === 'del-plan') {
+      e.stopPropagation();
+      const p = state.records.find(x => x.id === act.dataset.id);
+      if (p && confirm(`「${p.title || 'カスタム計画'}」を削除しますか？`)) { remove(p.id); changed(); toast('削除しました'); }
       return;
     }
     if (a === 'add') return openForm(ui.view === 'records' && ui.cat !== 'all' ? ui.cat : 'fuel');
