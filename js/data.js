@@ -1,5 +1,5 @@
 // データ保存・モデル・計算ロジック
-export const APP_VERSION = '0.6.1';
+export const APP_VERSION = '0.6.2';
 
 export const CATS = {
   fuel:    { label: 'ガソリン',     short: '給油',     icon: 'ti-gas-station',  color: '#BA7517' },
@@ -124,7 +124,26 @@ export function migrateVehicles() {
     if (r.updatedAt) r.updatedAt = Date.now();   // 0 の標準データは同期で他端末の内容が勝つようにそのまま
     dirty = true;
   }
+  if (dedupeFuel()) dirty = true;
   if (dirty) save();
+  return dirty;
+}
+
+// 同じ乗り物・同じ日・同じ金額の給油が「距離あり」と「距離なし」で二重にあるとき（Excel 取り込み分と
+// トータルケア等から入れた分など）、距離なしの方を削除扱いにする。メモは残す側へ移す
+function dedupeFuel() {
+  const withOdo = new Map();
+  const key = r => `${r.extra?.vid || 'settings'}|${r.date}|${Number(r.amount) || 0}`;
+  for (const r of state.records) if (r.type === 'fuel' && !r.deleted && r.odo && r.date) withOdo.set(key(r), r);
+  let dirty = false;
+  for (const r of state.records) {
+    if (r.type !== 'fuel' || r.deleted || r.odo || !r.date) continue;
+    const keep = withOdo.get(key(r));
+    if (!keep) continue;
+    if (r.note && !keep.note) { keep.note = r.note; keep.updatedAt = Date.now(); }
+    r.deleted = true; r.updatedAt = Date.now();
+    dirty = true;
+  }
   return dirty;
 }
 
