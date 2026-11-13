@@ -291,12 +291,9 @@ function alertsOf(vid) {
 // ---------- ホーム ----------
 function renderHome() {
   const vs = vehicles();
-  const fs = fuelStats();
-  const recent = sortRecords(active().filter(r => r.type !== 'plan')).slice(0, 6);
   const hasData = active(null, '*').length > 0;
   const all = vs.map(v => ({ v, t: totals(v.id) }));
   const sum = all.reduce((a, x) => a + x.t.grand, 0);
-  const cur = vs.find(v => v.id === state.vid);
 
   const detail = (v, t) => {
     const cpk = costPerKm(v.id);
@@ -305,7 +302,7 @@ function renderHome() {
     return `<div class="g-detail">
       <div class="h-row"><span class="muted">ローン ${yen(t.loan)} ＋ 維持費 ${yen(t.upkeep)}</span><span class="tiny">ODO ${num(currentOdo(v.id))}km</span></div>
       <div class="stack-bar">${bar}</div>
-      <div class="mini-cats">
+      <div class="g-body"><div class="mini-cats">
         ${COST_TYPES.map(k => `<button class="mini-cat" data-cat="${k}"><span class="lbl"><i class="ti ${CATS[k].icon}" style="color:${CATS[k].color}" aria-hidden="true"></i>${CATS[k].short === '書類' ? '書類・保険' : CATS[k].label}</span><b>${yen(t.byType[k])}</b></button>`).join('')}
         <button class="mini-cat" data-cat="plan"><span class="lbl"><i class="ti ${CATS.plan.icon}" style="color:${CATS.plan.color}" aria-hidden="true"></i>カスタム計画</span><b>${yen(t.plan)}</b></button>
       </div>
@@ -313,7 +310,7 @@ function renderHome() {
         <div><div class="v">${f.avgEconomy ? num(f.avgEconomy, 1) : '—'}</div><div class="tiny">平均燃費 km/L</div></div>
         <div><div class="v">${cpk.fuel !== null ? '¥' + num(cpk.fuel, 1) : '—'}</div><div class="tiny">燃料費 /km</div></div>
         <div><div class="v">${cpk.upkeep !== null ? '¥' + num(cpk.upkeep, 1) : '—'}</div><div class="tiny">維持費 /km</div></div>
-      </div>
+      </div></div>
       <div class="tiny g-foot"><span>納車から ${num(Math.max(cpk.dist, 0))}km 走行</span>
         ${v.photo?.id ? `<span>${icon('ti-hand-finger')}写真を長押しでメンテのお知らせ</span>` : `<label class="link">${icon('ti-photo-plus')}写真を登録<input type="file" accept="image/*" data-vphoto hidden></label>`}</div>
     </div>`;
@@ -325,8 +322,11 @@ function renderHome() {
     ${!hasData ? `<div class="card empty">${icon('ti-file-spreadsheet')}<p>まだ記録がありません</p>
       <div class="btn-row" style="justify-content:center"><button class="btn primary" data-act="import-xlsx">${icon('ti-upload')}Excelから取り込む</button>
       <button class="btn" data-act="add">${icon('ti-plus')}記録を追加</button></div></div>` : ''}
-    <div class="grid-2"><div>
-      <div class="garage card">
+    <div class="quick">
+      <button class="btn primary" data-act="receipt-camera">${icon('ti-camera')}レシートで給油登録</button>
+      <button class="btn" data-act="add-fuel">${icon('ti-gas-station')}給油を手入力</button>
+    </div>
+    <div class="garage card">
         ${all.map(({ v, t }) => {
           const al = alertsOf(v.id);
           const on = v.id === state.vid;
@@ -335,6 +335,8 @@ function renderHome() {
               <div class="g-photo" data-peek="${h(v.id)}">${photoBox(v)}
                 ${al.count ? `<span class="g-badge ${al.over ? 'over' : 'soon'}" data-act="peek" data-peek-vid="${h(v.id)}" title="お知らせ ${al.count}件">${al.count}</span>` : ''}</div>
               <div class="g-name"><b>${h(v.vehicleName)}</b><span class="tiny">${al.count ? `${al.over ? '期限超過あり' : '期限が近いものあり'}（${al.count}件）` : 'メンテ期限 OK'}</span></div>
+              <div class="g-meta"><b>${yen(t.upkeep)}</b><span class="tiny">維持費</span></div>
+              <div class="g-meta"><b>${num(currentOdo(v.id))}<small>km</small></b><span class="tiny">ODO</span></div>
               <div class="g-total"><b>${yen(t.grand)}</b><span class="tiny">総額</span></div>
               ${icon(on ? 'ti-chevron-up' : 'ti-chevron-down', 'class="g-chev"')}
             </div>
@@ -343,15 +345,7 @@ function renderHome() {
         }).join('')}
         <div class="g-sum"><button class="link" data-act="add-vehicle">${icon('ti-plus')}乗り物を追加</button>
           ${vs.length > 1 ? `<span><span class="muted">全乗り物の合計</span> <b>${yen(sum)}</b></span>` : ''}</div>
-      </div>
-    </div><div>
-      <div class="quick">
-        <button class="btn primary" data-act="receipt-camera">${icon('ti-camera')}レシートで給油登録</button>
-        <button class="btn" data-act="add-fuel">${icon('ti-gas-station')}給油を手入力</button>
-      </div>
-      <div class="sec-title h-row"><span>最近の記録（${h(cur?.vehicleName || '')}）</span><button class="btn" style="padding:3px 10px;font-size:12px" data-cat="all">すべて見る</button></div>
-      ${recent.length ? recent.map(r => tlItem(r, fs)).join('') : '<div class="tiny" style="margin-left:4px">記録はまだありません</div>'}
-    </div></div>`;
+    </div>`;
   hydratePhotos($main);
 }
 

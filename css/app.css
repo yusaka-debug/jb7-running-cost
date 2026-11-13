@@ -300,3 +300,18 @@ table.t th:first-child, table.t td:first-child { text-align: left; }
 .ti.spin { display: inline-block; animation: spin 1s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .btn:disabled { opacity: .7; cursor: progress; }
+
+/* ホーム: 乗り物一覧を横いっぱいに */
+.g-meta { display: none; text-align: right; flex-direction: column; min-width: 110px; }
+.g-meta b { font-size: 15px; font-weight: 600; }
+.g-meta small { font-size: 11px; font-weight: 400; margin-left: 2px; color: var(--text2); }
+@media (min-width: 900px) {
+  main.view-home { max-width: 1360px; }
+  .g-meta { display: flex; }
+  .g-total { min-width: 150px; }
+  .g-body { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 340px); gap: 16px; align-items: start; }
+  .mini-cats { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .g-body .g-kpis { margin-top: 0; padding: 8px 0 0 16px; border-top: 0; border-left: 1px dashed var(--line); }
+  .g-item.active .g-detail { padding-left: 92px; }
+}
+@media (min-width: 900px) and (max-width: 1180px) { .mini-cats { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
