@@ -17,6 +17,12 @@ function doPost(e) {
   const token = PropertiesService.getScriptProperties().getProperty('TOKEN');
   if (!token || body.token !== token) return json_({ ok: false, error: 'unauthorized' });
 
+  const action = body.action || 'sync';
+  if (action === 'putFile') return json_(putFile_(body));
+  if (action === 'getFile') return json_(getFile_(body));
+  if (action === 'trashFile') return json_(trashFile_(body));
+  if (action !== 'sync') return json_({ ok: false, error: 'unknown action' });
+
   const lock = LockService.getScriptLock();
   lock.waitLock(20000);
   try {
@@ -98,9 +104,58 @@ function json_(obj) {
   return ContentService.createTextOutput(JSON.stringify(obj)).setMimeType(ContentService.MimeType.JSON);
 }
 
-/** 動作確認用: エディタから実行するとシートを作成する */
+// ---------- 添付ファイル（Google ドライブの専用フォルダに保存） ----------
+const FOLDER_NAME = 'のりもの維持費_添付';
+
+function folder_() {
+  const props = PropertiesService.getScriptProperties();
+  const id = props.getProperty('FOLDER_ID');
+  if (id) {
+    try { const f = DriveApp.getFolderById(id); if (!f.isTrashed()) return f; } catch (err) { /* 作り直す */ }
+  }
+  const f = DriveApp.createFolder(FOLDER_NAME);
+  props.setProperty('FOLDER_ID', f.getId());
+  return f;
+}
+
+// 専用フォルダの中のファイルだけ扱う（合言葉があっても他のドライブのファイルには触れない）
+function ownFile_(driveId) {
+  const file = DriveApp.getFileById(String(driveId));
+  const folderId = folder_().getId();
+  const parents = file.getParents();
+  while (parents.hasNext()) { if (parents.next().getId() === folderId) return file; }
+  throw new Error('not found');
+}
+
+function putFile_(body) {
+  if (!body.id || !body.data) return { ok: false, error: 'bad request' };
+  const folder = folder_();
+  const fileName = String(body.id) + '_' + String(body.name || 'file');
+  const same = folder.getFilesByName(fileName);   // 再送されたときは同じものを返す
+  if (same.hasNext()) return { ok: true, driveId: same.next().getId() };
+  const blob = Utilities.newBlob(Utilities.base64Decode(body.data), body.mime || 'application/octet-stream', fileName);
+  return { ok: true, driveId: folder.createFile(blob).getId() };
+}
+
+function getFile_(body) {
+  try {
+    const file = ownFile_(body.driveId);
+    const blob = file.getBlob();
+    return { ok: true, mime: blob.getContentType(), data: Utilities.base64Encode(blob.getBytes()) };
+  } catch (err) {
+    return { ok: false, error: 'ファイルが見つかりません' };
+  }
+}
+
+function trashFile_(body) {
+  try { ownFile_(body.driveId).setTrashed(true); } catch (err) { /* 既に無い */ }
+  return { ok: true };
+}
+
+/** 動作確認用: エディタから実行するとシートと添付用フォルダを作成する */
 function setup() {
   sheet_();
+  folder_();
   if (!PropertiesService.getScriptProperties().getProperty('TOKEN')) {
     Logger.log('スクリプトプロパティ TOKEN を設定してください');
   }

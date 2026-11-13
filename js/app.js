@@ -4,7 +4,9 @@ import {
   vehicles, setVehicle, addVehicle, deleteVehicle, fixCurrentVid, presetsForKind, remindersForKind,
 } from './data.js';
 import { readReceipt } from './receipt.js';
-import { syncNow, scheduleSync, onSyncChange, syncConfigured } from './sync.js';
+import { syncNow, scheduleSync, onSyncChange, syncConfigured, loadFile } from './sync.js';
+import { storeFile, delBlob, discardFiles, fmtSize, isPdf, isImage, getBlob } from './files.js';
+import { readMaintDoc } from './docread.js';
 import { parseWorkbook, applyImport, exportWorkbook, exportJSON, importJSON } from './excel.js';
 
 const $main = document.getElementById('main');
@@ -77,6 +79,7 @@ function tlItem(r, fs) {
   const badges = [];
   if (r.type === 'fuel' && r.full === false) badges.push('継ぎ足し');
   if (r.extra?.expr) badges.push(h(r.extra.expr));
+  if (r.extra?.files?.length) badges.push(`${icon('ti-paperclip')}${r.extra.files.length}`);
   let plan = '';
   if (r.type === 'plan') {
     const meta = [r.extra?.genre, r.extra?.maker].filter(Boolean).join(' · ');
@@ -345,6 +348,7 @@ function renderSettings() {
 
 // ---------- 入力フォーム ----------
 function openForm(type, rec = null, opts = {}) {
+  if (formCleanup) { const c = formCleanup; formCleanup = null; c(); }
   const isNew = !rec;
   const r = rec ? JSON.parse(JSON.stringify(rec)) : newRecord(type, opts.prefill || {});
   if (isNew && ['fuel', 'maint', 'custom', 'doc', 'coating'].includes(type) && !r.date) r.date = today();
@@ -372,7 +376,14 @@ function openForm(type, rec = null, opts = {}) {
       <div class="two">${amountField('金額（円）')}<div class="field"><label>給油量 (L)</label><input name="liters" inputmode="decimal" value="${h(r.liters ?? '')}"><div class="err" data-err="liters"></div></div></div>
       <label class="check"><input type="checkbox" name="full" ${r.full !== false ? 'checked' : ''}>満タン給油（燃費計算に使う）</label>
       <div class="calc-preview" id="fuel-preview"></div>${noteField()}`,
-    maint: () => `${titleField('実施項目', [...new Set([...(s.maintPresets || []), ...active('maint').map(x => x.title)])])}
+    maint: () => `<div class="receipt-box" id="doc-box">
+        <div class="btn-row">
+          <label class="btn primary">${icon('ti-camera')}整備記録を撮影<input type="file" accept="image/*" capture="environment" data-doc hidden></label>
+          <label class="btn">${icon('ti-file-search')}PDF・写真から読み取る<input type="file" accept="application/pdf,image/*" data-doc hidden></label>
+        </div>
+        <div class="tiny" id="doc-status">ディーラーの整備記録・請求書から 日付・走行距離・金額・作業内容 を読み取り、ファイルも添付します（PC はここへドロップ）</div>
+      </div>
+      ${titleField('実施項目', [...new Set([...(s.maintPresets || []), ...active('maint').map(x => x.title)])])}
       <div class="two">${dateField('実施日')}${odoField()}</div>${amountField('費用（円）')}${noteField()}`,
     custom: () => `${titleField('商品名')}<div class="two">${dateField('購入日')}${amountField()}</div>${noteField()}`,
     doc: () => `${titleField('品名', ['任意保険', '自動車税', '車検', '重量税', '自賠責保険', '駐車場使用承諾書', '印鑑登録費用', '印鑑登録証発行費用'])}
@@ -388,6 +399,12 @@ function openForm(type, rec = null, opts = {}) {
     <h2>${isNew ? '記録を追加' : CATS[type].label + 'を編集'}</h2>
     ${isNew && !opts.lockType ? `<div class="seg">${Object.entries(CATS).map(([k, c]) => `<button type="button" style="--c:${c.color}" class="${k === type ? 'active' : ''}" data-type="${k}">${icon(c.icon)}${c.short}</button>`).join('')}</div>` : ''}
     <form id="rec-form" novalidate>${bodies[type]()}
+      ${type !== 'plan' ? `<div class="field"><label>添付（PDF・写真）</label>
+        <div class="att-list" id="att-list"></div>
+        <div class="btn-row">
+          <label class="btn">${icon('ti-paperclip')}ファイルを添付<input type="file" accept="application/pdf,image/*" multiple data-attach hidden></label>
+          <label class="btn">${icon('ti-camera')}撮影して添付<input type="file" accept="image/*" capture="environment" data-attach hidden></label>
+        </div><div class="err" data-err="files"></div></div>` : ''}
       <div class="btn-row" style="margin-top:6px">
         ${!isNew ? `<button type="button" class="btn danger" data-act="delete">${icon('ti-trash')}削除</button>` : ''}
         <span style="flex:1"></span>
@@ -439,7 +456,89 @@ function openForm(type, rec = null, opts = {}) {
     } finally { box.classList.remove('busy'); }
   };
   $sheet.querySelectorAll('[data-receipt]').forEach(inp => inp.addEventListener('change', () => { runReceipt(inp.files[0]); inp.value = ''; }));
+
+  // ---- 添付 ----
+  const origFiles = [...(r.extra?.files || [])];
+  let att = [...origFiles];
+  const added = [];          // このフォームで追加した分（キャンセル時に端末から消す）
+  let saved = false;
+  let closed = false;
+  let storing = 0;           // 保存処理中のファイル数
+  const thumbUrls = [];
+  const renderAtt = async () => {
+    const box = $sheet.querySelector('#att-list');
+    if (!box) return;
+    box.innerHTML = att.map(f => `<div class="att" data-file="${h(f.id)}">
+      <button type="button" class="att-open" data-act="open-file" data-id="${h(f.id)}" title="開く">
+        ${f.mime?.startsWith('image/') ? `<img alt="" data-thumb="${h(f.id)}">` : icon(f.mime === 'application/pdf' ? 'ti-file-type-pdf' : 'ti-file')}
+        <span><span class="att-name">${h(f.name)}</span><span class="tiny">${fmtSize(f.size || 0)}${f.driveId ? ' · ドライブ保存済' : ''}</span></span>
+      </button>
+      <button type="button" class="att-del" data-act="del-file" data-id="${h(f.id)}" aria-label="添付を外す">${icon('ti-x')}</button></div>`).join('');
+    for (const img of box.querySelectorAll('img[data-thumb]')) {
+      const blob = await getBlob(img.dataset.thumb).catch(() => null);
+      if (blob) { const u = URL.createObjectURL(blob); thumbUrls.push(u); img.src = u; } else img.replaceWith(Object.assign(document.createElement('i'), { className: 'ti ti-photo' }));
+    }
+  };
+  const addFiles = async files => {
+    const errEl = $sheet.querySelector('[data-err=files]');
+    if (errEl) errEl.textContent = '';
+    const metas = [];
+    for (const file of files) {
+      storing++;
+      try {
+        const m = await storeFile(file);
+        if (closed) { if (!saved) delBlob(m.id).catch(() => {}); continue; }   // 保存中にフォームが閉じられた
+        added.push(m); att.push(m); metas.push(m);
+      } catch (err) { if (errEl) errEl.textContent = err.message; }
+      finally { storing--; }
+    }
+    renderAtt();
+    return metas;
+  };
+  $sheet.querySelectorAll('[data-attach]').forEach(inp => inp.addEventListener('change', () => { addFiles([...inp.files]); inp.value = ''; }));
+  renderAtt();
+
+  // ---- 整備記録の読み取り（メンテ） ----
+  const runDoc = async file => {
+    const st = $sheet.querySelector('#doc-status');
+    if (!st || !file) return;
+    const box = $sheet.querySelector('#doc-box');
+    box.classList.add('busy');
+    st.textContent = '読み取り中…（初回は部品のダウンロードに少し時間がかかります）';
+    addFiles([file]);
+    try {
+      const res = await readMaintDoc(file, s.maintPresets || [], p => { st.textContent = `読み取り中… ${p}%`; });
+      const got = [];
+      if (res.title && !form.title.value.trim()) form.title.value = res.title;
+      if (res.items.length) got.push(`作業 ${res.items.map(i => i.name).join('・')}`);
+      if (res.date) { form.date.value = res.date; got.push(`日付 ${res.date}`); }
+      if (res.odo) { form.odo.value = res.odo; got.push(`走行 ${num(res.odo)}km`); }
+      if (res.amount) { form.amount.value = res.amount; got.push(`合計 ${yen(res.amount)}`); }
+      const detail = res.items.filter(i => i.amount).map(i => `${i.name} ${yen(i.amount)}`);
+      if (detail.length && !form.note.value.includes(detail[0])) form.note.value = [form.note.value.trim(), '【整備記録より】' + detail.join(' / ')].filter(Boolean).join('\n');
+      st.innerHTML = got.length
+        ? `${icon('ti-check')} ${h(got.join(' · '))}<br><span class="warn-text">内容を確認してから保存してください。</span>`
+        : `<span class="warn-text">読み取れる項目がありませんでした（ファイルは添付済み）。手入力してください。</span>`;
+      st.title = res.text;
+    } catch (err) {
+      console.error(err);
+      st.innerHTML = `<span class="warn-text">${h(err.message)}（ファイルは添付済み）</span>`;
+    } finally { box.classList.remove('busy'); }
+  };
+  $sheet.querySelectorAll('[data-doc]').forEach(inp => inp.addEventListener('change', () => { runDoc(inp.files[0]); inp.value = ''; }));
+  if (opts.docFile) runDoc(opts.docFile);
+
   formReceiptHandler = type === 'fuel' ? runReceipt : null;
+  formFileHandler = type === 'plan' ? null : file => {
+    if (type === 'fuel' && isImage(file)) return runReceipt(file);
+    if (type === 'maint') return runDoc(file);
+    return addFiles([file]).then(m => { if (m.length) toast('添付しました'); });
+  };
+  formCleanup = () => {
+    closed = true;
+    thumbUrls.forEach(u => URL.revokeObjectURL(u));
+    if (!saved) added.forEach(f => delBlob(f.id).catch(() => {}));
+  };
   if (opts.receiptFile) runReceipt(opts.receiptFile);
   if (opts.openCamera) setTimeout(() => $sheet.querySelector('[data-receipt][capture]')?.click(), 0);
 
@@ -461,8 +560,16 @@ function openForm(type, rec = null, opts = {}) {
     }
     if (t.dataset.act === 'close') return closeForm();
     if (t.dataset.act === 'plus') { form.amount.value += '+'; form.amount.focus(); return; }
+    if (t.dataset.act === 'open-file') { const f = att.find(x => x.id === t.dataset.id); if (f) openAttachment(f); return; }
+    if (t.dataset.act === 'del-file') {
+      const f = att.find(x => x.id === t.dataset.id);
+      if (f && confirm(`添付「${f.name}」を外しますか？（保存すると削除されます）`)) { att = att.filter(x => x !== f); renderAtt(); }
+      return;
+    }
     if (t.dataset.act === 'delete') {
-      if (confirm(`「${r.title || CATS[type].label}」を削除しますか？`)) { remove(r.id); closeForm(); changed(); toast('削除しました'); }
+      if (confirm(`「${r.title || CATS[type].label}」を削除しますか？${origFiles.length ? '\n添付ファイルも削除されます。' : ''}`)) {
+        remove(r.id); discardFiles([...origFiles, ...added]); saved = true; closeForm(); changed(); toast('削除しました');
+      }
     }
   };
 
@@ -491,7 +598,11 @@ function openForm(type, rec = null, opts = {}) {
       if (!out.liters || !Number.isFinite(out.liters)) ok = err('liters', '給油量を入力してください');
     }
     if (type === 'plan') Object.assign(out.extra, { genre: form.genre.value.trim(), maker: form.maker.value.trim(), link: form.link.value.trim() });
+    if (storing) ok = err('files', '添付ファイルを保存中です。少し待ってからもう一度「保存」を押してください');
     if (!ok) return;
+    if (att.length) out.extra.files = att; else delete out.extra.files;
+    discardFiles([...origFiles, ...added].filter(f => !att.includes(f)));
+    saved = true;
     upsert(out);
     if (opts.fromPlan) remove(opts.fromPlan);
     closeForm();
@@ -502,7 +613,33 @@ function openForm(type, rec = null, opts = {}) {
   setTimeout(() => { const f = form.querySelector(type === 'fuel' ? '[name=odo]' : '[name=title]'); if (f && isNew && window.innerWidth > 700) f.focus(); }, 50);
 }
 let formReceiptHandler = null;
-function closeForm() { formReceiptHandler = null; $sheet.hidden = true; $sheet.innerHTML = ''; document.body.style.overflow = ''; }
+let formFileHandler = null;
+let formCleanup = null;
+function closeForm() {
+  formReceiptHandler = null; formFileHandler = null;
+  if (formCleanup) { const c = formCleanup; formCleanup = null; c(); }
+  $sheet.hidden = true; $sheet.innerHTML = ''; document.body.style.overflow = '';
+}
+
+// 添付を開く（写真はアプリ内で表示、PDF は新しいタブ）
+async function openAttachment(f) {
+  let blob;
+  try { toast('開いています…', 1500); blob = await loadFile(f); }
+  catch (err) { alert(err.message); return; }
+  const url = URL.createObjectURL(blob);
+  setTimeout(() => URL.revokeObjectURL(url), 5 * 60 * 1000);
+  if ((f.mime || blob.type).startsWith('image/')) {
+    const v = document.createElement('div');
+    v.className = 'viewer';
+    v.innerHTML = `<img src="${url}" alt="${h(f.name)}"><div class="viewer-bar"><span>${h(f.name)}</span>
+      <a class="btn" href="${url}" download="${h(f.name)}">${icon('ti-download')}保存</a><button class="btn" type="button">${icon('ti-x')}閉じる</button></div>`;
+    v.addEventListener('click', e => { if (!e.target.closest('a')) v.remove(); });
+    document.body.appendChild(v);
+    return;
+  }
+  const w = window.open(url, '_blank');
+  if (!w) { const a = document.createElement('a'); a.href = url; a.download = f.name; a.click(); }
+}
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !$sheet.hidden) closeForm(); });
 
 // ---------- 画面上の操作 ----------
@@ -675,11 +812,14 @@ async function handleFile(file) {
     try { importJSON(await file.text()); fixCurrentVid(); changed(); toast('復元しました'); } catch (err) { alert('復元できませんでした: ' + err.message); }
     return;
   }
-  if (file.type.startsWith('image/') || /\.(jpe?g|png|webp|heic)$/.test(name)) {
-    if (formReceiptHandler) return formReceiptHandler(file);
+  const pdf = isPdf(file), img = isImage(file);
+  if ((pdf || img) && formFileHandler && !$sheet.hidden) return formFileHandler(file);
+  if (pdf) return openForm('maint', null, { lockType: true, docFile: file });
+  if (img) {
+    if (!$sheet.hidden) closeForm();
     return openForm('fuel', null, { lockType: true, receiptFile: file });
   }
-  toast('Excel（.xlsx）、バックアップ（.json）、レシート画像に対応しています', 3500);
+  toast('Excel（.xlsx）、バックアップ（.json）、レシート・整備記録（画像/PDF）に対応しています', 3500);
 }
 
 function render() {

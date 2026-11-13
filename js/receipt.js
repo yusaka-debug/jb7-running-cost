@@ -27,8 +27,8 @@ async function getWorker() {
   return workerPromise;
 }
 
-// 写真を縮小・グレースケール化・コントラスト強調して認識しやすくする
-async function preprocess(file) {
+// 画像ファイルを最大 maxSide px の canvas に描く
+export async function fileToCanvas(file, maxSide = 2000, minSide = 0) {
   const bmp = await createImageBitmap(file).catch(() => null);
   let img = bmp;
   if (!img) {
@@ -40,12 +40,25 @@ async function preprocess(file) {
     });
   }
   const w0 = img.width, h0 = img.height;
-  const scale = Math.min(1, 2000 / Math.max(w0, h0));
+  // 小さい画像は文字認識のために拡大（最大2.5倍）
+  const long = Math.max(w0, h0);
+  const scale = long > maxSide ? maxSide / long : (minSide && long < minSide ? Math.min(2.5, minSide / long) : 1);
   const w = Math.round(w0 * scale), h = Math.round(h0 * scale);
   const c = document.createElement('canvas');
   c.width = w; c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.imageSmoothingQuality = 'high';
+  g.drawImage(img, 0, 0, w, h);
+  return c;
+}
+
+// 写真を縮小・グレースケール化・コントラスト強調して認識しやすくする
+async function preprocess(file) {
+  return enhance(await fileToCanvas(file, 2000));
+}
+function enhance(c) {
+  const w = c.width, h = c.height;
   const ctx = c.getContext('2d', { willReadFrequently: true });
-  ctx.drawImage(img, 0, 0, w, h);
   const d = ctx.getImageData(0, 0, w, h);
   const px = d.data;
   // 明るさの分布から黒/白点を決めて伸ばす
@@ -69,18 +82,27 @@ async function preprocess(file) {
   return c;
 }
 
-export async function readReceipt(file, onProgress = () => {}) {
+/** 画像ファイルまたは canvas を文字認識して文字列を返す。 */
+// psm: 文字の並びの解析方法。'6'=1つの文字ブロック（tesseract.js の既定。レシート向き）、'4'=表を含む1段組の文書（整備明細など）向き
+export async function ocr(source, onProgress = () => {}, psm = '6') {
   progressCb = onProgress;
   onProgress(0, '準備中');
-  const canvas = await preprocess(file);
+  const canvas = source instanceof HTMLCanvasElement ? enhance(source) : await preprocess(source);
   const worker = await getWorker();
+  await worker.setParameters({ tessedit_pageseg_mode: psm });
   const { data } = await worker.recognize(canvas);
-  return { ...parseReceipt(data.text), text: data.text };
+  return data.text;
+}
+
+export async function readReceipt(file, onProgress = () => {}) {
+  const text = await ocr(file, onProgress);
+  return { ...parseReceipt(text), text };
 }
 
 // ---------- 文字列から値を取り出す ----------
-function normalize(text) {
-  return text
+export function normalize(text) {
+  // NFKC: PDF に多い部首文字（⽇⽉⾦ など）や半角カナ・全角英数を普通の文字に揃える
+  return text.normalize('NFKC')
     .replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     .replace(/[Ａ-Ｚａ-ｚ]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0))
     // 日本語の文字間に入った空白（「数 量」など）を詰める
@@ -90,7 +112,7 @@ function normalize(text) {
     .replace(/(\d)[ \t]+(?=[,.]\d)/g, '$1').replace(/(\d[,.])[ \t]+(?=\d)/g, '$1')
     .replace(/[ \t]+/g, ' ');
 }
-const toNum = s => Number(String(s).replace(/,/g, ''));
+const toNum = s => Number(String(s).replace(/[,.](?=\d{3}(?!\d))/g, '').replace(/,/g, ''));
 
 export function parseReceipt(raw) {
   const text = normalize(raw || '');
@@ -116,36 +138,46 @@ export function parseReceipt(raw) {
   }
 
   // 金額: 合計系の行を優先。小計・税・お預り・お釣りは除外
-  const amountOf = l => {
-    const ms = [...l.matchAll(/¥?\s*(\d{1,3}(?:,\d{3})+|\d{2,6})(?![\d.])/g)].map(m => toNum(m[1])).filter(v => v >= 100 && v <= 100000);
-    return ms.length ? ms[ms.length - 1] : null;
-  };
-  const prio = [/合\s*計|お買上|お買い上げ|ご請求|請求額|現計|お支払|支払金額|ご利用額|利用金額|TOTAL/i, /金\s*額|油種計|小計/];
-  const bad = /お預|預り|預かり|釣|ポイント|税|内税|消費税|対象|残高|値引/;
-  outer: for (const re of prio) {
-    for (let i = 0; i < lines.length; i++) {
-      const l = lines[i];
-      if (!re.test(l) || bad.test(l)) continue;
-      const v = amountOf(l) ?? (lines[i + 1] && !bad.test(lines[i + 1]) ? amountOf(lines[i + 1]) : null);
-      if (v) { out.amount = v; break outer; }
-    }
-  }
-  if (!out.amount) {
-    const yenVals = [...text.matchAll(/¥\s*(\d{1,3}(?:,\d{3})+|\d{3,6})/g)].map(m => toNum(m[1])).filter(v => v >= 100 && v <= 100000);
-    if (yenVals.length) out.amount = Math.max(...yenVals);
-  }
+  out.amount = pickTotal(lines, [/合\s*計|お買上|お買い上げ|ご請求|請求額|現計|お支払|支払金額|ご利用額|利用金額|TOTAL/i, /金\s*額|油種計|小計/]);
 
   // 数字どうしで補完・検算（給油量×単価 ≒ 金額）
   if (!out.liters && out.amount && out.unit) out.liters = Math.round(out.amount / out.unit * 100) / 100;
   if (!out.amount && out.liters && out.unit) out.amount = Math.round(out.liters * out.unit);
   out.consistent = !!(out.amount && out.liters && out.unit) && Math.abs(out.liters * out.unit - out.amount) / out.amount < 0.05;
 
-  // 日付: 2026/11/12, 2026年11月12日, 26/11/12, 令和8年11月12日
-  let m = text.match(/(20\d{2})\s*[\/年.\-]\s*(\d{1,2})\s*[\/月.\-]\s*(\d{1,2})/);
-  if (m) out.date = ymd(+m[1], +m[2], +m[3]);
-  if (!out.date && (m = text.match(/(?:令和|R)\s*(\d{1,2})\s*[年.\/]\s*(\d{1,2})\s*[月.\/]\s*(\d{1,2})/))) out.date = ymd(2018 + +m[1], +m[2], +m[3]);
-  if (!out.date && (m = text.match(/(?<!\d)(\d{2})\/(\d{1,2})\/(\d{1,2})(?!\d)/))) out.date = ymd(2000 + +m[1], +m[2], +m[3]);
+  out.date = findDate(text);
   return out;
+}
+
+/** 行の最後にある金額（100〜max 円） */
+export function amountOf(l, max = 100000) {
+  // 「22.869」のように桁区切りがピリオドに化けたものも金額として扱う
+  const ms = [...l.matchAll(/¥?\s*(\d{1,3}(?:[,.]\d{3})+|\d{2,7})(?![\d.,])/g)].map(m => toNum(m[1])).filter(v => v >= 100 && v <= max);
+  return ms.length ? ms[ms.length - 1] : null;
+}
+
+/** 合計系の行から金額を拾う。prio は優先順の正規表現 */
+export function pickTotal(lines, prio, max = 100000) {
+  const bad = /お預|預り|預かり|釣|ポイント|税|内税|消費税|対象|残高|値引/;
+  for (const re of prio) {
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i];
+      if (!re.test(l) || bad.test(l)) continue;
+      const v = amountOf(l, max) ?? (lines[i + 1] && !bad.test(lines[i + 1]) ? amountOf(lines[i + 1], max) : null);
+      if (v) return v;
+    }
+  }
+  const yenVals = lines.join('\n').match(/¥\s*(\d{1,3}(?:,\d{3})+|\d{3,7})/g)?.map(s => toNum(s.replace(/[¥\s]/g, ''))).filter(v => v >= 100 && v <= max) || [];
+  return yenVals.length ? Math.max(...yenVals) : null;
+}
+
+/** 日付: 2026/11/12, 2026年11月12日, 26/11/12, 令和8年11月12日 */
+export function findDate(text) {
+  let m = text.match(/(20\d{2})\s*[\/年.\-]\s*(\d{1,2})\s*[\/月.\-]\s*(\d{1,2})/);
+  let d = m ? ymd(+m[1], +m[2], +m[3]) : null;
+  if (!d && (m = text.match(/(?:令和|R)\s*(\d{1,2})\s*[年.\/]\s*(\d{1,2})\s*[月.\/]\s*(\d{1,2})/))) d = ymd(2018 + +m[1], +m[2], +m[3]);
+  if (!d && (m = text.match(/(?<!\d)(\d{2})\/(\d{1,2})\/(\d{1,2})(?!\d)/))) d = ymd(2000 + +m[1], +m[2], +m[3]);
+  return d;
 }
 function ymd(y, mo, d) {
   if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;

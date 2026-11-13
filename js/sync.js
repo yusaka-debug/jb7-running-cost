@@ -1,6 +1,7 @@
 // Google スプレッドシート（Apps Script Web アプリ）との同期
 // 方式: 前回同期以降に変更したレコードを送信 → サーバーが updatedAt の新しい方を採用して保存 → 全件を返す → 端末側も新しい方を採用
 import { state, save, saveSync } from './data.js';
+import { getBlob, putBlob, blobToBase64, base64ToBlob, pendingDriveDeletes, clearDriveDelete } from './files.js';
 
 let running = null;
 let timer = null;
@@ -50,6 +51,9 @@ export async function syncNow() {
       state.sync.lastSyncAt = Date.now();
       state.sync.status = state.records.some(r => (r.updatedAt || 0) > startedAt) ? 'pending' : 'ok';
       saveSync(); emit();
+      // 添付ファイルを Drive へ（失敗しても記録の同期は成功扱い）
+      const up = await syncFiles().catch(e => { console.warn('files', e); return 0; });
+      if (up) scheduleSync(300);
       return { pushed: changes.length, pulled: changed };
     } catch (e) {
       state.sync.status = 'error';
@@ -61,6 +65,54 @@ export async function syncNow() {
     }
   })();
   return running;
+}
+
+async function call(action, payload) {
+  const res = await fetch(state.sync.url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({ token: state.sync.token, action, ...payload }),
+    redirect: 'follow',
+  });
+  let data;
+  try { data = JSON.parse(await res.text()); } catch { throw new Error('サーバーの応答を読めません'); }
+  if (!data.ok) throw new Error(data.error === 'unknown action' ? 'Apps Script を最新版に更新してください（SETUP.md）' : (data.error || '失敗しました'));
+  return data;
+}
+
+// まだ Drive に無い添付をアップロードし、記録に driveId を書き込む。戻り値=更新した記録数
+async function syncFiles() {
+  for (const driveId of pendingDriveDeletes()) {
+    await call('trashFile', { driveId }).catch(() => {});
+    clearDriveDelete(driveId);
+  }
+  let updated = 0;
+  for (const r of state.records) {
+    if (r.deleted || !Array.isArray(r.extra?.files)) continue;
+    let dirty = false;
+    for (const f of r.extra.files) {
+      if (f.driveId) continue;
+      const blob = await getBlob(f.id).catch(() => null);
+      if (!blob) continue;   // 他端末で付けたファイル（その端末がアップロードする）
+      const data = await call('putFile', { id: f.id, name: f.name, mime: f.mime, data: await blobToBase64(blob) });
+      f.driveId = data.driveId;
+      dirty = true;
+    }
+    if (dirty) { r.updatedAt = Date.now(); updated++; save(); }
+  }
+  return updated;
+}
+
+/** 添付ファイルの中身。端末に無ければ Drive から取ってきて保存する */
+export async function loadFile(f) {
+  const local = await getBlob(f.id).catch(() => null);
+  if (local) return local;
+  if (!f.driveId) throw new Error('このファイルは別の端末にあり、まだ同期されていません');
+  if (!syncConfigured()) throw new Error('この端末には無いファイルです（同期を設定すると開けます）');
+  const data = await call('getFile', { driveId: f.driveId });
+  const blob = base64ToBlob(data.data, f.mime || data.mime);
+  await putBlob(f.id, blob).catch(() => {});
+  return blob;
 }
 
 // シートから戻ってきた値を端末の形式に揃える
