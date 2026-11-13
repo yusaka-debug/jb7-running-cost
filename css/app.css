@@ -290,3 +290,13 @@ table.t th:first-child, table.t td:first-child { text-align: left; }
 .peek-body .rem:first-child { border-top: 0; }
 .photo-edit { display: flex; gap: 14px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
 .photo-edit label.btn { cursor: pointer; }
+
+/* 同期の結果表示 */
+.sync-msg { display: flex; gap: 8px; align-items: flex-start; margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; }
+.sync-msg .ti { font-size: 18px; flex: none; }
+.sync-msg.ok { background: var(--ok-bg); color: var(--ok-text); }
+.sync-msg.error { background: var(--danger-bg); color: var(--danger-text); }
+.sync-msg.busy { background: var(--card2); color: var(--text2); }
+.ti.spin { display: inline-block; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.btn:disabled { opacity: .7; cursor: progress; }

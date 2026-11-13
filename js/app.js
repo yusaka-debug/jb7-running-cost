@@ -39,6 +39,33 @@ document.getElementById('nav').addEventListener('click', e => {
 
 function changed() { render(); scheduleSync(); }
 
+// ---------- 同期の結果表示（設定画面） ----------
+function syncMsgHtml() {
+  const m = ui.syncMsg;
+  if (!m) return '<div class="sync-msg" data-sync-msg hidden></div>';
+  const ic = { ok: 'ti-circle-check', error: 'ti-alert-triangle', busy: 'ti-loader-2 spin' }[m.kind];
+  return `<div class="sync-msg ${m.kind}" data-sync-msg role="status">${icon(ic)}<span>${h(m.text)}</span></div>`;
+}
+function setSyncMsg(kind, text) {
+  ui.syncMsg = kind ? { kind, text } : null;
+  const el = $main.querySelector('[data-sync-msg]');
+  if (el) el.outerHTML = syncMsgHtml();
+}
+// 設定画面の入力欄の URL・合言葉を保存して、足りないものがあればそのメッセージを返す
+function applySyncForm(sf) {
+  const url = sf.querySelector('[name=url]').value.trim();
+  const token = sf.querySelector('[name=token]').value.trim();
+  const changedConf = url !== state.sync.url || token !== state.sync.token;
+  state.sync.url = url; state.sync.token = token;
+  if (changedConf) state.sync.lastPush = 0; // 接続先が変わったら全件送り直す
+  saveSync();
+  if (!url && !token) return { msg: 'URL と合言葉が入っていません。両方を入れてから「今すぐ同期」を押してください', field: 'url' };
+  if (!url) return { msg: 'Apps Script の Web アプリ URL が入っていません', field: 'url' };
+  if (!/^https:\/\/script\.google(usercontent)?\.com\/.+\/exec$/.test(url)) return { msg: 'URL の形が違います。https://script.google.com/macros/s/…/exec の形の URL を貼り付けてください', field: 'url' };
+  if (!token) return { msg: '合言葉（トークン）が入っていません', field: 'token' };
+  return null;
+}
+
 // ---------- 共通パーツ ----------
 function syncPill() {
   const s = state.sync;
@@ -593,8 +620,9 @@ function renderSettings() {
     <div class="card" data-form="sync">
       <div class="field"><label>Apps Script の Web アプリ URL</label><input name="url" placeholder="https://script.google.com/macros/s/…/exec" value="${h(sy.url)}" autocomplete="off"></div>
       <div class="field"><label>合言葉（トークン）</label><div class="with-btn"><input name="token" value="${h(sy.token)}" autocomplete="off"><button data-act="gen-token" title="ランダム生成" aria-label="ランダム生成">${icon('ti-dice-5')}</button></div></div>
-      <div class="h-row"><span class="tiny">最終同期: ${h(last)}${sy.status === 'error' ? `<br><span style="color:var(--danger-text)">${h(sy.error)}</span>` : ''}</span>
+      <div class="h-row"><span class="tiny">最終同期: ${h(last)}</span>
         <button class="btn primary" data-act="sync">${icon('ti-refresh')}今すぐ同期</button></div>
+      ${syncMsgHtml()}
       <div class="tiny" style="margin-top:8px">設定方法はリポジトリの SETUP.md を参照。PC と iPhone で同じ URL と合言葉を入れると、記録が自動で揃います。</div>
     </div>
 
@@ -978,8 +1006,28 @@ $main.addEventListener('click', async e => {
     if (a === 'help-to') { const el = $main.querySelector('#' + act.dataset.to); if (el) el.scrollIntoView({ behavior: 'smooth' }); return; }
     if (a === 'to-settings') return go('settings');
     if (a === 'sync') {
-      if (!syncConfigured()) return go('settings');
-      try { const r = await syncNow(); fixCurrentVid(); render(); toast(`同期しました（送信${r.pushed}件・更新${r.pulled}件）`); } catch (err) { render(); toast(state.sync.error, 4000); }
+      const sf = act.closest('[data-form="sync"]');
+      if (sf) {
+        const bad = applySyncForm(sf);
+        if (bad) { setSyncMsg('error', bad.msg); toast(bad.msg, 4000); sf.querySelector(`[name=${bad.field}]`)?.focus(); return; }
+      } else if (!syncConfigured()) {
+        ui.syncMsg = { kind: 'error', text: '同期するには、下の「クラウド同期」に URL と合言葉を入れてください' };
+        go('settings'); toast('URL と合言葉を入れてください', 3000);
+        $main.querySelector('[data-form="sync"]')?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        return;
+      }
+      if (act.disabled) return;
+      act.disabled = true; act.innerHTML = `${icon('ti-loader-2 spin')}同期中…`;
+      setSyncMsg('busy', '同期中です。件数が多いと数十秒かかります…');
+      try {
+        const r = await syncNow();
+        const time = new Date().toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
+        ui.syncMsg = { kind: 'ok', text: `同期が完了しました（${time}）。送信 ${r.pushed ?? 0}件・受信 ${r.pulled ?? 0}件` };
+        fixCurrentVid(); render(); toast('同期が完了しました');
+      } catch (err) {
+        ui.syncMsg = { kind: 'error', text: `同期できませんでした：${state.sync.error || err.message}` };
+        render(); toast('同期できませんでした', 4000);
+      }
       return;
     }
     if (a === 'import-xlsx') return importXlsx();
@@ -1049,14 +1097,7 @@ $main.addEventListener('change', e => {
     return;
   }
   const sf = e.target.closest('[data-form="sync"]');
-  if (sf) {
-    const url = sf.querySelector('[name=url]').value.trim();
-    const token = sf.querySelector('[name=token]').value.trim();
-    const changedConf = url !== state.sync.url || token !== state.sync.token;
-    state.sync.url = url; state.sync.token = token;
-    if (changedConf) state.sync.lastPush = 0; // 接続先が変わったら全件送り直す
-    saveSync();
-  }
+  if (sf) { applySyncForm(sf); setSyncMsg(null); }
 });
 
 // ---------- 乗り物の追加 ----------
