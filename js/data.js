@@ -1,5 +1,5 @@
 // データ保存・モデル・計算ロジック
-export const APP_VERSION = '0.6.7';
+export const APP_VERSION = '0.7.0';
 
 export const CATS = {
   fuel:    { label: 'ガソリン',     short: '給油',     icon: 'ti-gas-station',  color: '#BA7517' },

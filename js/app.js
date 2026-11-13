@@ -9,6 +9,7 @@ import { syncNow, scheduleSync, onSyncChange, syncConfigured, loadFile } from '.
 import { storeFile, delBlob, discardFiles, fmtSize, isPdf, isImage, getBlob } from './files.js';
 import { readMaintDoc } from './docread.js';
 import { helpHtml } from './help.js';
+import { syncLink, parseSyncLink, qrSvg, readQrFromFile } from './syncqr.js';
 import { parseWorkbook, applyImport, exportWorkbook, exportJSON, importJSON } from './excel.js';
 
 const $main = document.getElementById('main');
@@ -74,6 +75,56 @@ function applySyncForm(sf) {
   if (!/^https:\/\/script\.google(usercontent)?\.com\/.+\/exec$/.test(url)) return { msg: 'URL の形が違います。https://script.google.com/macros/s/…/exec の形の URL を貼り付けてください', field: 'url' };
   if (!token) return { msg: '合言葉（トークン）が入っていません', field: 'token' };
   return null;
+}
+
+// ---------- QR コードで同期設定を受け渡す ----------
+async function showSyncQr() {
+  const sf = $main.querySelector('[data-form="sync"]');
+  const bad = sf ? applySyncForm(sf) : null;
+  if (bad) { setSyncMsg('error', 'QR コードを作るには、先に ' + bad.msg.replace(/^.*?(URL|合言葉)/, '$1')); toast(bad.msg, 4000); return; }
+  const ov = document.createElement('div');
+  ov.className = 'viewer qr-view';
+  ov.innerHTML = `<div class="qr-card" role="dialog" aria-label="同期設定の QR コード">
+    <div class="h-row"><b>同期設定の QR コード</b><button class="btn" data-close>${icon('ti-x')}閉じる</button></div>
+    <div class="qr-box">${icon('ti-loader-2 spin')}</div>
+    <ol class="tiny qr-steps">
+      <li>iPhone で、<b>ホーム画面のアイコン</b>からこのアプリを開く</li>
+      <li>設定 →「QRコードを読み取って設定」→「写真を撮る」でこの QR コードを撮る</li>
+      <li>確認が出たら OK。自動で同期が始まります</li>
+    </ol>
+    <div class="tiny qr-warn">${icon('ti-lock')}合言葉が入っています。人に見せたり、写真を共有したりしないでください。</div>
+  </div>`;
+  const close = () => ov.remove();
+  ov.addEventListener('click', e => { if (e.target === ov || e.target.closest('[data-close]')) close(); });
+  document.body.appendChild(ov);
+  try { ov.querySelector('.qr-box').innerHTML = await qrSvg(syncLink(state.sync.url, state.sync.token)); }
+  catch (err) { ov.querySelector('.qr-box').innerHTML = `<div class="err">${h(err.message)}</div>`; }
+}
+
+/** 受け取った同期設定を保存して、すぐ同期する */
+function acceptSyncConfig(cfg, from) {
+  const same = cfg.url === state.sync.url && cfg.token === state.sync.token;
+  const msg = [`${from}から同期の設定を読み取りました。`, '', `URL: ${cfg.url.slice(0, 48)}…`, '', 'この端末に設定して同期しますか？', syncConfigured() ? '（今の同期設定は置き換わります）' : ''].join('\n');
+  if (!same && !confirm(msg)) return;
+  state.sync.url = cfg.url; state.sync.token = cfg.token;
+  if (!same) state.sync.lastPush = 0;
+  saveSync();
+  go('settings');
+  $main.querySelector('[data-form="sync"]')?.scrollIntoView({ block: 'center' });
+  $main.querySelector('[data-form="sync"] [data-act="sync"]')?.click();
+}
+
+async function scanSyncQr(file) {
+  setSyncMsg('busy', 'QR コードを読み取っています…');
+  try {
+    const text = await readQrFromFile(file);
+    const cfg = parseSyncLink(text);
+    if (!cfg) throw new Error('このアプリの同期設定の QR コードではありません');
+    setSyncMsg(null);
+    acceptSyncConfig(cfg, 'QR コード');
+  } catch (err) {
+    setSyncMsg('error', err.message); toast('読み取れませんでした', 3000);
+  }
 }
 
 // ---------- 共通パーツ ----------
@@ -627,7 +678,11 @@ function renderSettings() {
       <div class="h-row"><span class="tiny">最終同期: ${h(last)}</span>
         <button class="btn primary" data-act="sync">${icon('ti-refresh')}今すぐ同期</button></div>
       ${syncMsgHtml()}
-      <div class="tiny" style="margin-top:8px">設定方法はリポジトリの SETUP.md を参照。PC と iPhone で同じ URL と合言葉を入れると、記録が自動で揃います。</div>
+      <div class="qr-row">
+        <button class="btn" data-act="sync-qr">${icon('ti-qrcode')}QRコードを表示（ほかの端末へ設定を渡す）</button>
+        <label class="btn">${icon('ti-scan')}QRコードを読み取って設定<input type="file" accept="image/*" data-sync-scan hidden></label>
+      </div>
+      <div class="tiny" style="margin-top:8px">設定済みの端末（PC）で QR コードを表示し、iPhone のホーム画面のアイコンから開いたアプリで「QRコードを読み取って設定」→ 写真を撮る、で設定が入ります。設定方法はリポジトリの SETUP.md を参照。</div>
     </div>
 
     <div class="sec-title">データ</div>
@@ -1054,6 +1109,7 @@ $main.addEventListener('click', async e => {
       try { importJSON(await f.text()); changed(); toast('復元しました'); } catch (err) { alert('復元できませんでした: ' + err.message); }
       return;
     }
+    if (a === 'sync-qr') return showSyncQr();
     if (a === 'gen-token') {
       const t = Array.from(crypto.getRandomValues(new Uint8Array(18)), b => b.toString(16).padStart(2, '0')).join('');
       const inp = $main.querySelector('[data-form="sync"] [name="token"]');
@@ -1079,6 +1135,7 @@ $main.addEventListener('click', async e => {
 
 $main.addEventListener('change', e => {
   if (e.target.matches('[data-vphoto]')) { const f = e.target.files[0]; e.target.value = ''; if (f) setVehiclePhoto(f); return; }
+  if (e.target.matches('[data-sync-scan]')) { const f = e.target.files[0]; e.target.value = ''; if (f) scanSyncQr(f); return; }
   const vf = e.target.closest('[data-form="vehicle"]');
   if (vf) {
     const k = e.target.name;
@@ -1177,7 +1234,12 @@ onSyncChange(() => {
 // ---------- 起動 ----------
 load();
 render();
-if (syncConfigured()) syncNow().then(r => { if (r?.pulled) { fixCurrentVid(); render(); } }).catch(() => {});
+// カメラアプリで QR を読んで開いたとき（URL の # に同期設定が入っている）
+const linkCfg = parseSyncLink(location.hash);
+if (linkCfg) {
+  history.replaceState(null, '', location.pathname + location.search);   // 合言葉をアドレス欄・履歴に残さない
+  setTimeout(() => acceptSyncConfig(linkCfg, 'リンク'), 300);
+} else if (syncConfigured()) syncNow().then(r => { if (r?.pulled) { fixCurrentVid(); render(); } }).catch(() => {});
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible' && syncConfigured()) syncNow().then(r => { if (r?.pulled) { fixCurrentVid(); render(); } }).catch(() => {});
 });
