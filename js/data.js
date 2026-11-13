@@ -131,14 +131,23 @@ export function migrateVehicles() {
 
 // 同じ乗り物・同じ日・同じ金額の給油が「距離あり」と「距離なし」で二重にあるとき（Excel 取り込み分と
 // トータルケア等から入れた分など）、距離なしの方を削除扱いにする。メモは残す側へ移す
+// 金額が 0（記録なし）のものや、同じ日の距離ありの給油の合計とほぼ同じ金額（1日2回をまとめて1行にしたもの）も対象
 function dedupeFuel() {
-  const withOdo = new Map();
-  const key = r => `${r.extra?.vid || 'settings'}|${r.date}|${Number(r.amount) || 0}`;
-  for (const r of state.records) if (r.type === 'fuel' && !r.deleted && r.odo && r.date) withOdo.set(key(r), r);
+  const byDay = new Map();
+  const key = r => `${r.extra?.vid || 'settings'}|${r.date}`;
+  for (const r of state.records) {
+    if (r.type !== 'fuel' || r.deleted || !r.odo || !r.date) continue;
+    if (!byDay.has(key(r))) byDay.set(key(r), []);
+    byDay.get(key(r)).push(r);
+  }
   let dirty = false;
   for (const r of state.records) {
     if (r.type !== 'fuel' || r.deleted || r.odo || !r.date) continue;
-    const keep = withOdo.get(key(r));
+    const day = byDay.get(key(r));
+    if (!day) continue;
+    const amt = Number(r.amount) || 0;
+    const sum = day.reduce((s, x) => s + (Number(x.amount) || 0), 0);
+    const keep = day.find(x => (Number(x.amount) || 0) === amt) || ((!amt || Math.abs(sum - amt) <= Math.max(50, sum * 0.01)) ? day[0] : null);
     if (!keep) continue;
     if (r.note && !keep.note) { keep.note = r.note; keep.updatedAt = Date.now(); }
     r.deleted = true; r.updatedAt = Date.now();
